@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spike Tennis</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Inter:wght@400;600&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:   #00b4ff;
+      --green:  #b2ff14;
+      --dark:   #080c14;
+      --darker: #050810;
+      --card:   #0d1423;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--darker);
+      color: #e8eaf0;
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+    }
+
+    /* ── Hero ─────────────────────────────────────── */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 2rem;
+      overflow: hidden;
+    }
+
+    /* animated court grid background */
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(rgba(0,180,255,.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,180,255,.07) 1px, transparent 1px);
+      background-size: 60px 60px;
+      animation: gridScroll 18s linear infinite;
+    }
+    @keyframes gridScroll {
+      from { background-position: 0 0; }
+      to   { background-position: 60px 60px; }
+    }
+
+    /* radial glow */
+    .hero::after {
+      content: '';
+      position: absolute;
+      top: -30%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 900px;
+      height: 900px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,180,255,.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-content { position: relative; z-index: 1; }
+
+    .badge {
+      display: inline-block;
+      background: rgba(0,180,255,.12);
+      border: 1px solid rgba(0,180,255,.4);
+      color: var(--blue);
+      border-radius: 100px;
+      padding: .35rem 1rem;
+      font-size: .8rem;
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: .1em;
+      margin-bottom: 1.6rem;
+    }
+
+    h1 {
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 900;
+      font-size: clamp(3.5rem, 10vw, 8rem);
+      line-height: 1;
+      background: linear-gradient(135deg, #fff 30%, var(--blue) 70%, var(--green));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-shadow: none;
+      margin-bottom: 1.2rem;
+    }
+
+    .tagline {
+      font-size: clamp(1rem, 2.5vw, 1.3rem);
+      color: #8fa3c0;
+      max-width: 520px;
+      margin: 0 auto 2.8rem;
+      line-height: 1.6;
+    }
+
+    .hero-btns { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: .55rem;
+      padding: .85rem 2rem;
+      border-radius: 10px;
+      font-family: 'Orbitron', sans-serif;
+      font-size: .85rem;
+      font-weight: 700;
+      letter-spacing: .05em;
+      text-decoration: none;
+      transition: transform .15s, box-shadow .15s;
+    }
+    .btn:hover { transform: translateY(-2px); }
+
+    .btn-primary {
+      background: var(--blue);
+      color: #000;
+      box-shadow: 0 0 28px rgba(0,180,255,.45);
+    }
+    .btn-primary:hover { box-shadow: 0 0 42px rgba(0,180,255,.7); }
+
+    .btn-secondary {
+      background: transparent;
+      color: #fff;
+      border: 1.5px solid rgba(255,255,255,.2);
+    }
+    .btn-secondary:hover { border-color: var(--blue); color: var(--blue); }
+
+    /* animated ball */
+    .ball {
+      position: absolute;
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 20px var(--green), 0 0 60px rgba(178,255,20,.4);
+      animation: ballArc 5s ease-in-out infinite;
+      pointer-events: none;
+      z-index: 0;
+    }
+    @keyframes ballArc {
+      0%   { top: 72%; left: 20%; opacity: 0; }
+      10%  { opacity: 1; }
+      50%  { top: 28%; left: 78%; }
+      90%  { opacity: 1; }
+      100% { top: 72%; left: 20%; opacity: 0; }
+    }
+    .ball::after {
+      content: '';
+      position: absolute;
+      inset: -6px;
+      border-radius: 50%;
+      background: rgba(178,255,20,.15);
+    }
+
+    /* ── Divider ──────────────────────────────────── */
+    .net-divider {
+      width: 100%;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, var(--blue), var(--green), var(--blue), transparent);
+      margin: 0;
+    }
+
+    /* ── Sections ─────────────────────────────────── */
+    section {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 6rem 2rem;
+    }
+
+    .section-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: clamp(1.5rem, 4vw, 2.4rem);
+      color: #fff;
+      margin-bottom: .6rem;
+    }
+    .section-subtitle {
+      color: #637490;
+      margin-bottom: 3rem;
+      font-size: 1rem;
+    }
+
+    /* ── Feature cards ────────────────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.2rem;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,.06);
+      border-radius: 14px;
+      padding: 1.8rem;
+      transition: border-color .2s, transform .2s;
+    }
+    .card:hover {
+      border-color: rgba(0,180,255,.4);
+      transform: translateY(-3px);
+    }
+
+    .card-icon {
+      font-size: 2.2rem;
+      margin-bottom: 1rem;
+    }
+
+    .card h3 {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1rem;
+      color: var(--blue);
+      margin-bottom: .6rem;
+    }
+
+    .card p {
+      font-size: .9rem;
+      color: #7a90b0;
+      line-height: 1.6;
+    }
+
+    /* ── Scoring section ──────────────────────────── */
+    .scoring-grid {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .score-flow {
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      flex-wrap: wrap;
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,.06);
+      border-radius: 14px;
+      padding: 1.6rem 2rem;
+      flex: 1;
+      min-width: 280px;
+    }
+
+    .score-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: .3rem;
+    }
+
+    .score-val {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.5rem;
+      font-weight: 900;
+      color: #fff;
+    }
+    .score-label {
+      font-size: .65rem;
+      color: #637490;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .score-arrow {
+      color: var(--blue);
+      font-size: 1.3rem;
+      opacity: .6;
+    }
+
+    .deuce-box {
+      background: linear-gradient(135deg, rgba(0,180,255,.1), rgba(178,255,20,.08));
+      border: 1px solid rgba(0,180,255,.3);
+      border-radius: 14px;
+      padding: 1.6rem;
+      flex: 1;
+      min-width: 240px;
+    }
+    .deuce-box h3 {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.2rem;
+      color: var(--blue);
+      margin-bottom: .8rem;
+    }
+    .deuce-box p {
+      font-size: .9rem;
+      color: #8fa3c0;
+      line-height: 1.7;
+    }
+
+    /* ── Controls table ───────────────────────────── */
+    .controls-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .95rem;
+    }
+    .controls-table th {
+      text-align: left;
+      font-family: 'Orbitron', sans-serif;
+      font-size: .75rem;
+      color: var(--blue);
+      letter-spacing: .1em;
+      padding: .6rem 1rem;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .controls-table td {
+      padding: .75rem 1rem;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+      color: #c0cfe0;
+    }
+    .controls-table tr:last-child td { border-bottom: none; }
+    .controls-table tr:hover td { background: rgba(0,180,255,.04); }
+
+    kbd {
+      display: inline-block;
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 6px;
+      padding: .15rem .55rem;
+      font-family: 'Orbitron', sans-serif;
+      font-size: .75rem;
+      color: var(--green);
+    }
+
+    /* ── Setup steps ──────────────────────────────── */
+    .steps { display: flex; flex-direction: column; gap: 1rem; }
+
+    .step {
+      display: flex;
+      gap: 1.2rem;
+      align-items: flex-start;
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,.06);
+      border-radius: 12px;
+      padding: 1.2rem 1.5rem;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: rgba(0,180,255,.15);
+      border: 1.5px solid var(--blue);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Orbitron', sans-serif;
+      font-size: .85rem;
+      font-weight: 700;
+      color: var(--blue);
+    }
+
+    .step-body h4 {
+      font-size: .95rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: .3rem;
+    }
+    .step-body p {
+      font-size: .87rem;
+      color: #7a90b0;
+      line-height: 1.5;
+    }
+
+    code {
+      background: rgba(255,255,255,.07);
+      border-radius: 5px;
+      padding: .1rem .4rem;
+      font-size: .85em;
+      color: var(--green);
+      font-family: 'Courier New', monospace;
+    }
+
+    /* ── Footer ───────────────────────────────────── */
+    footer {
+      border-top: 1px solid rgba(255,255,255,.06);
+      text-align: center;
+      padding: 2.5rem 1rem;
+      color: #3a4e66;
+      font-size: .85rem;
+    }
+    footer a { color: var(--blue); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Responsive tweaks ────────────────────────── */
+    @media (max-width: 600px) {
+      .score-flow { justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Hero ─────────────────────────────────────── -->
+<div class="hero">
+  <div class="ball"></div>
+  <div class="hero-content">
+    <div class="badge">🎾 Roblox Game</div>
+    <h1>SPIKE<br>TENNIS</h1>
+    <p class="tagline">
+      Fast-paced, neon-lit tennis. Two players, one court,
+      timing-based shots, and full match scoring.
+    </p>
+    <div class="hero-btns">
+      <a class="btn btn-primary" href="https://www.roblox.com" target="_blank">
+        ▶ Play on Roblox
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/YOUR_USERNAME/spike-tennis" target="_blank">
+        ⟨/⟩ View Source
+      </a>
+    </div>
+  </div>
+</div>
+
+<div class="net-divider"></div>
+
+<!-- ── Features ──────────────────────────────────── -->
+<section>
+  <h2 class="section-title">What's in the game</h2>
+  <p class="section-subtitle">No shops. No fluff. Just tennis.</p>
+  <div class="cards">
+    <div class="card">
+      <div class="card-icon">🎯</div>
+      <h3>Timing System</h3>
+      <p>A glowing ring appears near the ball. Hit at the perfect moment for a power shot — too early or late and the ball goes weak or out.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚡</div>
+      <h3>Shot Types</h3>
+      <p>Flat, Topspin, Slice, Lob, Smash, and Serve — each with unique arc physics, bounce behavior, and spin effects.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">✨</div>
+      <h3>Neon Graphics</h3>
+      <p>Bloom, SunRays, Atmosphere post-processing. Neon ball trail, bounce sparks, glowing court edge trim, and a crisp blue hard court.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🏆</div>
+      <h3>Full Match Scoring</h3>
+      <p>Real tennis scoring — Points, Games, Sets, Deuce, and Advantage. Best of 3 sets to win the match.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">👥</div>
+      <h3>2-Player Multiplayer</h3>
+      <p>One player per side of the net. Server-authoritative hit validation so no cheating the timing window.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">📱</div>
+      <h3>Mobile + PC</h3>
+      <p>Tap to hit on mobile, click or Space on PC. Sprint with Shift. Works on all devices Roblox supports.</p>
+    </div>
+  </div>
+</section>
+
+<div class="net-divider"></div>
+
+<!-- ── Scoring ────────────────────────────────────── -->
+<section>
+  <h2 class="section-title">How scoring works</h2>
+  <p class="section-subtitle">Exactly like real tennis.</p>
+  <div class="scoring-grid">
+    <div class="score-flow">
+      <div class="score-step">
+        <div class="score-val">0</div>
+        <div class="score-label">Love</div>
+      </div>
+      <div class="score-arrow">→</div>
+      <div class="score-step">
+        <div class="score-val">15</div>
+        <div class="score-label">First</div>
+      </div>
+      <div class="score-arrow">→</div>
+      <div class="score-step">
+        <div class="score-val">30</div>
+        <div class="score-label">Second</div>
+      </div>
+      <div class="score-arrow">→</div>
+      <div class="score-step">
+        <div class="score-val">40</div>
+        <div class="score-label">Third</div>
+      </div>
+      <div class="score-arrow">→</div>
+      <div class="score-step">
+        <div class="score-val" style="color:var(--green)">WIN</div>
+        <div class="score-label">Game</div>
+      </div>
+    </div>
+
+    <div class="deuce-box">
+      <h3>⚡ Deuce Rule</h3>
+      <p>
+        When <strong>both players reach 40</strong> — it's <strong>DEUCE</strong>.<br><br>
+        Win the next point → <strong>ADVANTAGE</strong>.<br>
+        Win again → <strong>GAME</strong>.<br>
+        Lose advantage → back to <strong>DEUCE</strong>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<div class="net-divider"></div>
+
+<!-- ── Controls ───────────────────────────────────── -->
+<section>
+  <h2 class="section-title">Controls</h2>
+  <p class="section-subtitle">Simple to learn, satisfying to master.</p>
+  <div class="card" style="padding: 0; overflow: hidden;">
+    <table class="controls-table">
+      <thead>
+        <tr>
+          <th>Input</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><kbd>WASD</kbd></td><td>Move around the court</td></tr>
+        <tr><td><kbd>Shift</kbd></td><td>Sprint — chase down that lob</td></tr>
+        <tr><td><kbd>Click</kbd> / <kbd>Space</kbd></td><td>Hit ball / Serve</td></tr>
+        <tr><td><kbd>Q</kbd> (hold)</td><td>Topspin — fast low bounce</td></tr>
+        <tr><td><kbd>E</kbd> (hold)</td><td>Slice — slow skidding bounce</td></tr>
+        <tr><td><kbd>R</kbd> (hold)</td><td>Lob — high arc over opponent</td></tr>
+        <tr><td><kbd>F</kbd> (hold)</td><td>Smash — explosive downward slam</td></tr>
+        <tr><td>📱 Tap</td><td>Hit / Serve on mobile</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="net-divider"></div>
+
+<!-- ── Setup ──────────────────────────────────────── -->
+<section>
+  <h2 class="section-title">Get it in Roblox Studio</h2>
+  <p class="section-subtitle">Using <a href="https://rojo.space" target="_blank" style="color:var(--blue)">Rojo</a> (recommended) or manual copy-paste.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h4>Clone the repo</h4>
+        <p><code>git clone https://github.com/YOUR_USERNAME/spike-tennis</code></p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h4>Start the Rojo dev server</h4>
+        <p>Run <code>rojo serve</code> inside the project folder. Install Rojo v7+ if you don't have it.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h4>Connect in Studio</h4>
+        <p>Open Roblox Studio → click the <strong>Rojo</strong> plugin → <strong>Connect</strong>. All scripts sync instantly.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h4>Hit Play and test</h4>
+        <p>Open a local server with 2 player slots to test multiplayer. Both players load into opposite sides of the court automatically.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────── -->
+<footer>
+  <p>Spike Tennis &nbsp;·&nbsp; Built with Roblox Luau &nbsp;·&nbsp;
+    <a href="https://github.com/YOUR_USERNAME/spike-tennis" target="_blank">GitHub</a>
+  </p>
+</footer>
+
+</body>
+</html>
