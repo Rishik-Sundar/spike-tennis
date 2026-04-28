@@ -1,0 +1,15 @@
+# Roblox Studio files
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+
+# Rojo
+.rojo-sourcemap.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (if using toolchain scripts)
+node_modules/

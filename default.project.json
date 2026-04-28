@@ -1,0 +1,57 @@
+{
+    "name": "SpikeTennis",
+    "tree": {
+        "$className": "DataModel",
+        "ServerScriptService": {
+            "$className": "ServerScriptService",
+            "CourtBuilder": {
+                "$path": "src/ServerScriptService/CourtBuilder.server.lua"
+            },
+            "BallController": {
+                "$path": "src/ServerScriptService/BallController.server.lua"
+            },
+            "GameManager": {
+                "$path": "src/ServerScriptService/GameManager.server.lua"
+            },
+            "MatchManager": {
+                "$path": "src/ServerScriptService/MatchManager.server.lua"
+            }
+        },
+        "ReplicatedStorage": {
+            "$className": "ReplicatedStorage",
+            "Modules": {
+                "$className": "Folder",
+                "Constants": {
+                    "$path": "src/ReplicatedStorage/Modules/Constants.lua"
+                },
+                "ShotPhysics": {
+                    "$path": "src/ReplicatedStorage/Modules/ShotPhysics.lua"
+                },
+                "TennisScoring": {
+                    "$path": "src/ReplicatedStorage/Modules/TennisScoring.lua"
+                }
+            },
+            "Remotes": {
+                "$className": "Folder"
+            }
+        },
+        "StarterPlayer": {
+            "$className": "StarterPlayer",
+            "StarterPlayerScripts": {
+                "$className": "StarterPlayerScripts",
+                "PlayerController": {
+                    "$path": "src/StarterPlayerScripts/PlayerController.client.lua"
+                },
+                "UIController": {
+                    "$path": "src/StarterPlayerScripts/UIController.client.lua"
+                }
+            },
+            "StarterCharacterScripts": {
+                "$className": "StarterCharacterScripts",
+                "CameraController": {
+                    "$path": "src/StarterCharacterScripts/CameraController.client.lua"
+                }
+            }
+        }
+    }
+}
