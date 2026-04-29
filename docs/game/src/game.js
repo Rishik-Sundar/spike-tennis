@@ -47,7 +47,9 @@ sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 80;
 sun.shadow.camera.left=-20; sun.shadow.camera.right=20;
 sun.shadow.camera.top=22;   sun.shadow.camera.bottom=-22;
 scene.add(sun);
-scene.add(Object.assign(new THREE.DirectionalLight(0x334466, 0.4), { position: new THREE.Vector3(-6,8,-12) }));
+const fillLight = new THREE.DirectionalLight(0x334466, 0.4);
+fillLight.position.set(-6, 8, -12);
+scene.add(fillLight);
 const ballLight = new THREE.PointLight(0xb2ff14, 2.5, 7);
 scene.add(ballLight);
 
