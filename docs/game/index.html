@@ -198,6 +198,21 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
 <div id="bigmsg"></div>
 <button id="back-btn">← LOBBY</button>
 
+<!-- Version + error overlay -->
+<div id="ver" style="position:fixed;bottom:6px;right:8px;z-index:200;font-size:.6rem;
+  color:#3a5a80;letter-spacing:.1em;pointer-events:none;font-family:monospace">v2-canvas</div>
+<div id="errbox" style="display:none;position:fixed;top:10px;left:50%;transform:translateX(-50%);
+  z-index:300;background:#400;color:#ff8080;padding:10px 16px;border:1px solid #f55;
+  border-radius:8px;font-family:monospace;font-size:.78rem;max-width:90vw;text-align:left;
+  white-space:pre-wrap;line-height:1.4"></div>
+<script>
+  window.addEventListener('error', function(e){
+    var b = document.getElementById('errbox');
+    if (!b) return;
+    b.style.display = 'block';
+    b.textContent = 'JS ERROR: ' + (e.message || e) + '\n@ ' + (e.filename||'') + ':' + (e.lineno||'') + ':' + (e.colno||'');
+  });
+</script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="src/game.js"></script>
 </body>
