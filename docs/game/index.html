@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Spike Tennis</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#05080f;overflow:hidden;font-family:'Orbitron',sans-serif;color:#fff}
+canvas{display:block;width:100vw!important;height:100vh!important}
+
+/* ── Lobby overlay ──────────────────────────────────── */
+#lobby{
+  position:fixed;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;z-index:100;
+  background:rgba(5,8,15,.88);backdrop-filter:blur(4px);
+}
+.grid-bg{position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:linear-gradient(rgba(0,180,255,.05) 1px,transparent 1px),
+             linear-gradient(90deg,rgba(0,180,255,.05) 1px,transparent 1px);
+  background-size:55px 55px;animation:gm 22s linear infinite}
+@keyframes gm{to{background-position:55px 55px}}
+#lobby .inner{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center}
+.logo{font-size:clamp(2.8rem,7vw,5.5rem);font-weight:900;
+  background:linear-gradient(135deg,#fff 25%,#00b4ff 60%,#b2ff14);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  margin-bottom:.4rem;letter-spacing:.04em}
+.tagline{font-size:.78rem;color:#637490;letter-spacing:.14em;margin-bottom:2.8rem}
+.mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;width:min(540px,90vw)}
+.card{
+  background:rgba(12,18,32,.9);border:1.5px solid rgba(255,255,255,.07);
+  border-radius:14px;padding:1.5rem 1.2rem;
+  display:flex;flex-direction:column;align-items:center;gap:.55rem;
+  cursor:pointer;user-select:none;
+  transition:transform .18s,border-color .2s,box-shadow .2s;
+}
+.card:hover,.card:active{transform:translateY(-3px)}
+.card.blue:hover{border-color:#00b4ff;box-shadow:0 0 28px rgba(0,180,255,.25)}
+.card.green:hover{border-color:#b2ff14;box-shadow:0 0 28px rgba(178,255,20,.2)}
+.card.purple:hover{border-color:#a050ff;box-shadow:0 0 28px rgba(160,80,255,.2)}
+.card.orange:hover{border-color:#ff9632;box-shadow:0 0 28px rgba(255,150,50,.2)}
+.card .ico{font-size:2rem}
+.card .lbl{font-size:.88rem;font-weight:700;color:#fff;letter-spacing:.04em}
+.card .sub{font-size:.68rem;color:#637490;text-align:center;line-height:1.5}
+
+/* ── Online panel ──────────────────────────────────── */
+#online-panel{
+  position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:110;
+  background:rgba(5,8,15,.92)
+}
+.obox{background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.3);
+  border-radius:18px;padding:2rem 1.8rem;width:min(390px,90vw);
+  display:flex;flex-direction:column;gap:1rem}
+.obox h2{font-size:1.1rem;text-align:center;color:#fff}
+.tabs{display:flex;gap:.55rem}
+.tab{flex:1;padding:.62rem;border-radius:8px;cursor:pointer;font-family:'Orbitron',sans-serif;
+  font-size:.7rem;border:1px solid rgba(255,255,255,.1);background:transparent;
+  color:#637490;transition:all .15s}
+.tab.on{background:rgba(0,180,255,.15);border-color:#00b4ff;color:#00b4ff}
+.cbox{background:rgba(0,0,0,.4);border:1px solid rgba(0,180,255,.2);border-radius:10px;padding:1rem;text-align:center}
+.cbox .code{font-size:2.2rem;letter-spacing:.25em;color:#00b4ff;text-shadow:0 0 18px rgba(0,180,255,.6)}
+.cbox .hint{font-size:.66rem;color:#637490;margin-top:.3rem}
+input.ci{background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);border-radius:8px;
+  color:#fff;font-family:'Orbitron',sans-serif;font-size:1.3rem;letter-spacing:.2em;
+  padding:.7rem;width:100%;text-align:center;outline:none;transition:border-color .15s}
+input.ci:focus{border-color:#00b4ff}
+input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
+.abtn{background:#00b4ff;color:#000;border:none;border-radius:9px;
+  font-family:'Orbitron',sans-serif;font-size:.8rem;font-weight:700;
+  padding:.75rem;cursor:pointer;width:100%;transition:opacity .15s}
+.abtn:hover{opacity:.88}
+.gbtn{background:transparent;border:1px solid rgba(255,255,255,.1);color:#999;border-radius:9px;
+  font-family:'Orbitron',sans-serif;font-size:.75rem;padding:.7rem;cursor:pointer;width:100%}
+.gbtn:hover{border-color:#555}
+.st{font-size:.72rem;color:#637490;text-align:center;min-height:1em}
+.st.ok{color:#b2ff14}.st.err{color:#ff6050}
+
+/* ── In-game HUD ───────────────────────────────────── */
+#hud{position:fixed;top:0;left:0;right:0;z-index:50;
+  display:none;pointer-events:none;padding:10px}
+#scoreboard{
+  background:rgba(5,8,15,.82);border:1px solid rgba(0,180,255,.3);
+  border-radius:12px;padding:.6rem 1.4rem;margin:0 auto;width:fit-content;
+  display:flex;flex-direction:column;align-items:center;gap:.2rem
+}
+#pts{font-size:1.3rem;font-weight:700;color:#fff;letter-spacing:.06em}
+#gms{font-size:.7rem;color:rgba(160,200,255,.8);letter-spacing:.06em}
+#srv-dot{width:7px;height:7px;border-radius:50%;margin:0 auto}
+
+#ctrl-hint{
+  position:fixed;bottom:12px;left:12px;z-index:50;pointer-events:none;display:none;
+  font-size:.68rem;color:rgba(100,130,160,.65);line-height:1.8;
+}
+
+/* ── Serve UI ──────────────────────────────────────── */
+#serve-ui{
+  position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+  display:none;flex-direction:column;align-items:center;gap:.6rem;
+  z-index:50;width:320px;pointer-events:none
+}
+#serve-label{font-size:.85rem;color:#aabbcc;letter-spacing:.08em;text-align:center}
+#meter-track{width:100%;height:20px;background:rgba(0,0,0,.55);border-radius:10px;overflow:hidden;
+  border:1px solid rgba(255,255,255,.12);position:relative}
+#meter-perf{position:absolute;top:0;bottom:0;left:40%;width:20%;background:rgba(0,255,120,.25);border-radius:10px}
+#meter-good{position:absolute;top:0;bottom:0;left:25%;width:50%;background:rgba(178,255,20,.1);border-radius:10px}
+#meter-needle{position:absolute;top:-3px;bottom:-3px;width:18px;height:26px;border-radius:9px;
+  background:#ffdc32;box-shadow:0 0 14px #ffdc32;transform:translateX(-50%);transition:left .016s linear}
+#meter-zone{font-size:.75rem;font-weight:700;text-align:center;letter-spacing:.06em}
+
+/* ── Toss UI ──────────────────────────────────────── */
+#toss-ui{
+  position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+  display:none;flex-direction:column;align-items:center;gap:.5rem;
+  z-index:50;pointer-events:none
+}
+#toss-label{font-size:.95rem;font-weight:700;letter-spacing:.08em;text-align:center}
+#toss-hint{font-size:.7rem;color:rgba(160,190,220,.7);text-align:center}
+
+/* ── Big message ──────────────────────────────────── */
+#bigmsg{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  font-size:clamp(1.4rem,4vw,2.4rem);font-weight:700;color:#fff;
+  text-shadow:0 0 22px #00b4ff;letter-spacing:.06em;pointer-events:none;
+  z-index:60;display:none;text-align:center
+}
+
+/* ── Back btn ─────────────────────────────────────── */
+#back-btn{
+  position:fixed;top:10px;left:10px;z-index:60;
+  background:rgba(0,0,0,.55);border:1px solid rgba(0,180,255,.3);
+  color:#00b4ff;font-family:'Orbitron',sans-serif;font-size:.62rem;
+  padding:.35rem .8rem;border-radius:6px;cursor:pointer;display:none;
+  pointer-events:all
+}
+#back-btn:hover{background:rgba(0,180,255,.1)}
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<!-- LOBBY -->
+<div id="lobby">
+  <div class="inner">
+    <div class="logo">SPIKE TENNIS</div>
+    <div class="tagline">SELECT GAME MODE</div>
+    <div class="mode-grid">
+      <div class="card blue"   id="m-ai">
+        <div class="ico">🤖</div><div class="lbl">1v1 vs AI</div>
+        <div class="sub">Solo match vs computer. Classic singles.</div>
+      </div>
+      <div class="card green"  id="m-local">
+        <div class="ico">👥</div><div class="lbl">1v1 Local</div>
+        <div class="sub">Two players, same screen.<br>P1: WASD · P2: Arrows</div>
+      </div>
+      <div class="card purple" id="m-2v2">
+        <div class="ico">⚡</div><div class="lbl">2v2 vs AI</div>
+        <div class="sub">You + AI partner vs 2 AI. Doubles!</div>
+      </div>
+      <div class="card orange" id="m-online">
+        <div class="ico">🌐</div><div class="lbl">Play Online</div>
+        <div class="sub">Host or join with a room code.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ONLINE PANEL -->
+<div id="online-panel">
+  <div class="obox">
+    <h2>PLAY ONLINE</h2>
+    <div class="tabs">
+      <button class="tab on" id="t-h" onclick="swTab('h')">HOST</button>
+      <button class="tab"    id="t-j" onclick="swTab('j')">JOIN</button>
+    </div>
+    <div id="hv" style="display:flex;flex-direction:column;gap:.9rem">
+      <div class="cbox"><div class="code" id="rcode">– – – –</div>
+        <div class="hint">Share with your opponent</div></div>
+      <div class="st" id="hst">Generating code…</div>
+      <button class="gbtn" onclick="closeOnline()">Cancel</button>
+    </div>
+    <div id="jv" style="display:none;flex-direction:column;gap:.9rem">
+      <input class="ci" id="jin" maxlength="6" placeholder="ENTER ROOM CODE"
+             oninput="this.value=this.value.toUpperCase()"/>
+      <div class="st" id="jst"></div>
+      <button class="abtn" onclick="joinRoom()">JOIN GAME</button>
+      <button class="gbtn" onclick="closeOnline()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- IN-GAME HUD -->
+<div id="hud">
+  <div id="scoreboard">
+    <div id="pts">0 – 0</div>
+    <div id="gms">Games 0–0 · Sets 0–0</div>
+    <div id="srv-dot"></div>
+  </div>
+</div>
+<div id="ctrl-hint"></div>
+<div id="serve-ui">
+  <div id="serve-label">SET POWER — CLICK AT THE RIGHT MOMENT!</div>
+  <div id="meter-track">
+    <div id="meter-good"></div>
+    <div id="meter-perf"></div>
+    <div id="meter-needle"></div>
+  </div>
+  <div id="meter-zone" style="color:#ffdc32">WEAK</div>
+</div>
+<div id="toss-ui">
+  <div id="toss-label">HIT NOW!</div>
+  <div id="toss-hint">CLICK / SPACE WHEN IT'S AT THE PEAK</div>
+</div>
+<div id="bigmsg"></div>
+<button id="back-btn" onclick="window.game&&window.game.goLobby()">← LOBBY</button>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="src/game.js"></script>
+
+<script>
+// Lobby button wiring (non-module, so game.js sets window.game)
+document.getElementById('m-ai').onclick     = ()=>window.game?.startMode('ai_1v1');
+document.getElementById('m-local').onclick  = ()=>window.game?.startMode('local_1v1');
+document.getElementById('m-2v2').onclick    = ()=>window.game?.startMode('ai_2v2');
+document.getElementById('m-online').onclick = ()=>openOnline();
+
+let myPeer=null, pConn=null;
+function openOnline(){
+  document.getElementById('online-panel').style.display='flex';
+  document.getElementById('lobby').style.display='none';
+  swTab('h'); initHost();
+}
+function closeOnline(){
+  document.getElementById('online-panel').style.display='none';
+  document.getElementById('lobby').style.display='flex';
+  if(myPeer&&!pConn){myPeer.destroy();myPeer=null;}
+}
+function swTab(t){
+  document.getElementById('hv').style.display=t==='h'?'flex':'none';
+  document.getElementById('jv').style.display=t==='j'?'flex':'none';
+  document.getElementById('t-h').className='tab'+(t==='h'?' on':'');
+  document.getElementById('t-j').className='tab'+(t==='j'?' on':'');
+  if(t==='j'&&myPeer){myPeer.destroy();myPeer=null;pConn=null;}
+  if(t==='h')initHost();
+}
+function setSt(id,msg,cls){const e=document.getElementById(id);e.textContent=msg;e.className='st'+(cls?' '+cls:'');}
+function initHost(){
+  if(typeof Peer==='undefined')return setSt('hst','PeerJS loading…','');
+  if(myPeer)myPeer.destroy();myPeer=new Peer();
+  myPeer.on('open',id=>{
+    document.getElementById('rcode').textContent=id.slice(0,6).toUpperCase();
+    setSt('hst','Waiting for opponent…','');
+  });
+  myPeer.on('connection',conn=>{
+    pConn=conn;
+    setSt('hst','Opponent connected! Starting…','ok');
+    conn.on('data',d=>window.game?.onPeerData(d));
+    setTimeout(()=>{closeOnline();window.game?.startMode('online',conn,true);},1200);
+  });
+  myPeer.on('error',e=>setSt('hst','Error: '+e.type,'err'));
+}
+function joinRoom(){
+  const code=document.getElementById('jin').value.trim();
+  if(code.length<4){setSt('jst','Enter a valid code','err');return;}
+  if(typeof Peer==='undefined'){setSt('jst','PeerJS loading, try again','err');return;}
+  if(myPeer)myPeer.destroy();myPeer=new Peer();
+  setSt('jst','Connecting…','');
+  myPeer.on('open',()=>{
+    pConn=myPeer.connect(code.toLowerCase(),{reliable:true});
+    pConn.on('open',()=>{
+      setSt('jst','Connected! Loading…','ok');
+      pConn.on('data',d=>window.game?.onPeerData(d));
+      setTimeout(()=>{closeOnline();window.game?.startMode('online',pConn,false);},1200);
+    });
+    pConn.on('error',()=>setSt('jst','Could not connect. Check the code.','err'));
+  });
+  myPeer.on('error',e=>setSt('jst','Error: '+e.type,'err'));
+}
+</script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" async></script>
+</body>
+</html>
