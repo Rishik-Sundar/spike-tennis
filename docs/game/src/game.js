@@ -412,30 +412,26 @@ function updateRing3d(){
   ring3d.scale.setScalar(ringR/0.7 * 1.4);
 }
 
-// ── Camera (Roblox-style orbit) ───────────────────────
-// Target is a point ~3 units in front of P1 toward the net,
-// so when yaw=0 the camera sits behind P1 and shows the court ahead.
-const CAM = { yaw:0, pitch:0.42, dist:9.0, tx:0, ty:1.4, tz:6 };
+// ── Camera (Roblox 3rd-person: directly behind the character) ──
+const CAM = { yaw:0, pitch:0.32, dist:6.8, tx:0, ty:1.5, tz:9 };
 function updateCamera(){
   const p0 = P[0];
-  // Target = midway between P1 and the net (P1 always has z>=0.5)
-  const tgtX = p0.x * 0.6;
-  const tgtY = 1.3 + (p0.jumpH||0)*0.3;
-  const tgtZ = Math.max(0, p0.z - 3);  // 3 units in front of P1 toward net (clamped)
-  CAM.tx += (tgtX - CAM.tx) * 0.12;
-  CAM.ty += (tgtY - CAM.ty) * 0.08;
-  CAM.tz += (tgtZ - CAM.tz) * 0.12;
+  // Target = the character itself (chest height)
+  CAM.tx += (p0.x                       - CAM.tx) * 0.18;
+  CAM.ty += (1.5 + (p0.jumpH||0)*0.5    - CAM.ty) * 0.12;
+  CAM.tz += (p0.z                       - CAM.tz) * 0.18;
   const sy = Math.sin(CAM.yaw),  cy = Math.cos(CAM.yaw);
   const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
+  // yaw=0, P1 at +z → camera sits at target.z + dist (further +z = directly behind P1)
   camera.position.set(
     CAM.tx + CAM.dist*cp*sy,
     CAM.ty + CAM.dist*sp,
-    CAM.tz + CAM.dist*cp*cy   // yaw=0 → camera at +z (behind P1, since P1 is at +z)
+    CAM.tz + CAM.dist*cp*cy
   );
   camera.lookAt(CAM.tx, CAM.ty, CAM.tz);
 }
 function initCamera(){
-  CAM.tx = 0; CAM.ty = 1.4; CAM.tz = 6;
+  CAM.tx = 0; CAM.ty = 1.5; CAM.tz = 9;
   const sy = Math.sin(CAM.yaw), cy = Math.cos(CAM.yaw);
   const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
   camera.position.set(CAM.tx + CAM.dist*cp*sy, CAM.ty + CAM.dist*sp, CAM.tz + CAM.dist*cp*cy);
@@ -480,8 +476,9 @@ function showMsg(txt, ms){
 function showServeUI(on){ document.getElementById('serve-ui').style.display = on?'flex':'none'; }
 function updateServeMeter(v){
   document.getElementById('meter-needle').style.left = (v*100)+'%';
-  const zone = v>0.4&&v<0.6?'PERFECT!':v>0.25&&v<0.75?'GOOD':'WEAK';
-  const col  = v>0.4&&v<0.6?'#60ff80':v>0.25&&v<0.75?'#ffdc32':'#ff5050';
+  // Best zone is the LEFT (low %) — click early to nail a perfect serve
+  const zone = v < 0.18 ? 'PERFECT!' : v < 0.45 ? 'GOOD' : 'WEAK';
+  const col  = v < 0.18 ? '#60ff80' : v < 0.45 ? '#ffdc32' : '#ff5050';
   document.getElementById('meter-zone').textContent = zone;
   document.getElementById('meter-zone').style.color = col;
   document.getElementById('meter-needle').style.background = col;
@@ -624,7 +621,10 @@ function doServeHit(pi){
   if (tossHit) return;
   const tn = TOSS.t/TOSS.dur, dev = Math.abs(tn-0.5);
   const timing = Math.max(0, 1 - dev*3.0);
-  const quality = srvPower*0.5 + timing*0.5;
+  // Power quality: LEFT side of meter = best
+  // <0.18 = perfect (1.0), <0.45 = good (0.65), else weak (0.30)
+  const powerQ = srvPower < 0.18 ? 1.0 : srvPower < 0.45 ? 0.65 : 0.30;
+  const quality = powerQ*0.55 + timing*0.45;
   tossHit=true; TOSS.stop();
   P[pi].swingT=22; P[pi].jumpVel = 4.5;
   showTossUI(false);
@@ -677,7 +677,10 @@ function updateAI(dt){
     if (gPhase==='serve_meter' && pi===srv){
       aiCDs[pi] -= dt*60;
       if (aiCDs[pi]<=0){
-        srvPower = (D.power<1?0.40:D.power>1.1?0.85:0.65) + Math.random()*0.18;
+        // AI clicks the meter at low values (left side = perfect now)
+        srvPower = D.power<1 ? 0.30 + Math.random()*0.18    // easy: often misses zone
+                  : D.power>1.1 ? 0.05 + Math.random()*0.10  // hard: nails perfect
+                  : 0.10 + Math.random()*0.18;               // medium: usually good/perfect
         TOSS.start(p.x, p.z + (p.side==='near'?-0.3:0.3));
         gPhase='serve_toss'; tossHit=false; showServeUI(false);
         aiCDs[pi] = D.srvBaseCD;
