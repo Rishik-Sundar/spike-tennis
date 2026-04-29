@@ -1,8 +1,4 @@
-// Spike Tennis — Three.js 3D Game Engine
-import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass }     from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+// Spike Tennis — Three.js 3D Game Engine (global THREE loaded via <script> tag)
 
 // ── Renderer ──────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -20,7 +16,6 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  composer.setSize(innerWidth, innerHeight);
 });
 
 // ── Scene & Camera ────────────────────────────────────
@@ -31,14 +26,6 @@ scene.fog = new THREE.FogExp2(0x0a1020, 0.016);
 const camera = new THREE.PerspectiveCamera(68, innerWidth / innerHeight, 0.1, 300);
 camera.position.set(0, 3.5, 16);
 camera.lookAt(0, 1.5, 0);
-
-// ── Post-Processing (Bloom) ───────────────────────────
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(
-  new THREE.Vector2(innerWidth, innerHeight), 1.3, 0.5, 0.80
-);
-composer.addPass(bloom);
 
 // ── Lighting ──────────────────────────────────────────
 const ambient = new THREE.AmbientLight(0x112233, 0.8);
@@ -802,6 +789,7 @@ function onPeerData(d) {
 }
 
 window.game = { startMode, goLobby, onPeerData };
+if (window._pendingMode) { startMode(window._pendingMode); window._pendingMode = null; }
 
 // ── Main loop ─────────────────────────────────────────
 const clock = new THREE.Clock();
@@ -856,7 +844,7 @@ function animate() {
     showMsg(`P${SC.winner+1} WINS THE MATCH!\n\nClick to return`, 99999);
   }
 
-  composer.render();
+  renderer.render(scene, camera);
 }
 
 // ── Init ──────────────────────────────────────────────

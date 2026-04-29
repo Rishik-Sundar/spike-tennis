@@ -215,21 +215,18 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
 <div id="bigmsg"></div>
 <button id="back-btn" onclick="window.game&&window.game.goLobby()">← LOBBY</button>
 
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-  }
-}
-</script>
-<script type="module" src="src/game.js"></script>
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="src/game.js"></script>
 
 <script>
-// Lobby button wiring (non-module, so game.js sets window.game)
-document.getElementById('m-ai').onclick     = ()=>window.game?.startMode('ai_1v1');
-document.getElementById('m-local').onclick  = ()=>window.game?.startMode('local_1v1');
-document.getElementById('m-2v2').onclick    = ()=>window.game?.startMode('ai_2v2');
+// Lobby button wiring — use pending queue so clicks work even if game.js is still loading
+function selectMode(m){
+  if(window.game){ window.game.startMode(m); }
+  else { window._pendingMode = m; }
+}
+document.getElementById('m-ai').onclick     = ()=>selectMode('ai_1v1');
+document.getElementById('m-local').onclick  = ()=>selectMode('local_1v1');
+document.getElementById('m-2v2').onclick    = ()=>selectMode('ai_2v2');
 document.getElementById('m-online').onclick = ()=>openOnline();
 
 let myPeer=null, pConn=null;
@@ -253,36 +250,46 @@ function swTab(t){
 }
 function setSt(id,msg,cls){const e=document.getElementById(id);e.textContent=msg;e.className='st'+(cls?' '+cls:'');}
 function initHost(){
-  if(typeof Peer==='undefined')return setSt('hst','PeerJS loading…','');
-  if(myPeer)myPeer.destroy();myPeer=new Peer();
-  myPeer.on('open',id=>{
-    document.getElementById('rcode').textContent=id.slice(0,6).toUpperCase();
-    setSt('hst','Waiting for opponent…','');
-  });
-  myPeer.on('connection',conn=>{
-    pConn=conn;
-    setSt('hst','Opponent connected! Starting…','ok');
-    conn.on('data',d=>window.game?.onPeerData(d));
-    setTimeout(()=>{closeOnline();window.game?.startMode('online',conn,true);},1200);
-  });
-  myPeer.on('error',e=>setSt('hst','Error: '+e.type,'err'));
+  document.getElementById('rcode').textContent='– – – –';
+  setSt('hst','Connecting…','');
+  if(myPeer){try{myPeer.destroy();}catch(e){}myPeer=null;}
+  function tryCreate(){
+    if(typeof Peer==='undefined'){setTimeout(tryCreate,300);return;}
+    myPeer=new Peer();
+    myPeer.on('open',id=>{
+      document.getElementById('rcode').textContent=id.slice(0,6).toUpperCase();
+      setSt('hst','Waiting for opponent…','');
+    });
+    myPeer.on('connection',conn=>{
+      pConn=conn;
+      setSt('hst','Opponent connected! Starting…','ok');
+      conn.on('data',d=>window.game?.onPeerData(d));
+      setTimeout(()=>{closeOnline();selectMode('online');window.game&&(window.game._onlineConn={conn,host:true});},1200);
+    });
+    myPeer.on('error',e=>{setSt('hst','Connection error ('+e.type+'). Try refreshing.','err');});
+  }
+  tryCreate();
 }
 function joinRoom(){
-  const code=document.getElementById('jin').value.trim();
+  const code=document.getElementById('jin').value.trim().toLowerCase();
   if(code.length<4){setSt('jst','Enter a valid code','err');return;}
-  if(typeof Peer==='undefined'){setSt('jst','PeerJS loading, try again','err');return;}
-  if(myPeer)myPeer.destroy();myPeer=new Peer();
   setSt('jst','Connecting…','');
-  myPeer.on('open',()=>{
-    pConn=myPeer.connect(code.toLowerCase(),{reliable:true});
-    pConn.on('open',()=>{
-      setSt('jst','Connected! Loading…','ok');
-      pConn.on('data',d=>window.game?.onPeerData(d));
-      setTimeout(()=>{closeOnline();window.game?.startMode('online',pConn,false);},1200);
+  if(myPeer){try{myPeer.destroy();}catch(e){}myPeer=null;}
+  function tryJoin(){
+    if(typeof Peer==='undefined'){setTimeout(tryJoin,300);return;}
+    myPeer=new Peer();
+    myPeer.on('open',()=>{
+      pConn=myPeer.connect(code,{reliable:true});
+      pConn.on('open',()=>{
+        setSt('jst','Connected! Starting…','ok');
+        pConn.on('data',d=>window.game?.onPeerData(d));
+        setTimeout(()=>{closeOnline();window.game?.startMode('online',pConn,false);},1200);
+      });
+      pConn.on('error',()=>setSt('jst','Could not connect. Check the code.','err'));
     });
-    pConn.on('error',()=>setSt('jst','Could not connect. Check the code.','err'));
-  });
-  myPeer.on('error',e=>setSt('jst','Error: '+e.type,'err'));
+    myPeer.on('error',e=>setSt('jst','Error: '+e.type+'. Try again.','err'));
+  }
+  tryJoin();
 }
 </script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" async></script>
