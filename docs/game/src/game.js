@@ -340,9 +340,10 @@ const B = {
     ballMesh.position.copy(this.pos);
     trailMeshes.forEach(m => m.visible=false);
   },
-  launch(fromPi, tx, tz, speed, arcH){
+  launch(fromPi, tx, tz, speed, arcH, fromY){
     const cg = chars[fromPi].group;
-    this.pos.set(cg.position.x, 1.2, cg.position.z + (fromPi<2?-0.4:0.4));
+    const y0 = fromY != null ? fromY : 1.2;
+    this.pos.set(cg.position.x, y0, cg.position.z + (fromPi<2?-0.4:0.4));
     this.bounces=0; this.lastHitter=fromPi; this.active=true; this.trail=[];
     const dx = tx-this.pos.x, dz = tz-this.pos.z;
     const dist = Math.sqrt(dx*dx + dz*dz) || 1;
@@ -413,7 +414,7 @@ function updateRing3d(){
 }
 
 // ── Camera (Roblox 3rd-person: directly behind the character) ──
-const CAM = { yaw:0, pitch:0.32, dist:6.8, tx:0, ty:1.5, tz:9 };
+const CAM = { yaw:0, pitch:0.22, dist:5.2, tx:0, ty:1.6, tz:9 };
 function updateCamera(){
   const p0 = P[0];
   // Target = the character itself (chest height)
@@ -446,7 +447,8 @@ function camForwardRight(){
   const fl = Math.hypot(fx, fz) || 1;
   const Fx = fx/fl, Fz = fz/fl;
   // Right = F × up = (Fz, 0, -Fx)
-  return { Fx:Fx, Fz:Fz, Rx:Fz, Rz:-Fx };
+  // Right = F × up = (-Fz, 0, Fx) — was reversed before
+  return { Fx:Fx, Fz:Fz, Rx:-Fz, Rz:Fx };
 }
 
 // ── UI helpers ───────────────────────────────────────
@@ -479,7 +481,11 @@ function updateServeMeter(v){
   // Best zone is the LEFT (low %) — click early to nail a perfect serve
   const zone = v < 0.18 ? 'PERFECT!' : v < 0.45 ? 'GOOD' : 'WEAK';
   const col  = v < 0.18 ? '#60ff80' : v < 0.45 ? '#ffdc32' : '#ff5050';
-  document.getElementById('meter-zone').textContent = zone;
+  const pct  = Math.floor(v*100);
+  const pctEl = document.getElementById('meter-pct');
+  const zlbl  = document.getElementById('meter-zonelbl');
+  if (pctEl) pctEl.textContent = pct + '%';
+  if (zlbl)  zlbl.textContent = zone;
   document.getElementById('meter-zone').style.color = col;
   document.getElementById('meter-needle').style.background = col;
   document.getElementById('meter-needle').style.boxShadow = '0 0 14px '+col;
@@ -616,6 +622,8 @@ function lockPower(pi){
   TOSS.start(P[pi].x, P[pi].z + (P[pi].side==='near'?-0.3:0.3));
   gPhase='serve_toss'; tossHit=false;
   showServeUI(false); showTossUI(true, 0);
+  // Pre-jump for the serve so the character is already in the air at hit time
+  P[pi].jumpVel = 5.8;
 }
 function doServeHit(pi){
   if (tossHit) return;
@@ -626,12 +634,16 @@ function doServeHit(pi){
   const powerQ = srvPower < 0.18 ? 1.0 : srvPower < 0.45 ? 0.65 : 0.30;
   const quality = powerQ*0.55 + timing*0.45;
   tossHit=true; TOSS.stop();
-  P[pi].swingT=22; P[pi].jumpVel = 4.5;
+  P[pi].swingT=24;
+  // Top-up jump if we're already in the air (already launched in lockPower)
+  if ((P[pi].jumpH||0) < 0.3) P[pi].jumpVel = 6.5;
   showTossUI(false);
   const txR = (mX/innerWidth)*2 - 1;
   const tx = txR * 3.5;
   const tz = P[pi].side==='near' ? -SVC_Z*0.65 : SVC_Z*0.65;
-  B.launch(pi, tx, tz, 5+quality*6, 1.5);
+  // Launch from elevated position (jump serve) — racket meets ball above the head
+  const fromY = 2.2 + (P[pi].jumpH||0) * 1.4;
+  B.launch(pi, tx, tz, 6 + quality*8, 0.4, fromY);
   gPhase='rally'; P[pi].serving=false;
 }
 
@@ -655,17 +667,29 @@ function doHit(who){
   const txR = (mX/innerWidth)*2-1;
   const tx = Math.max(-CHW+0.5, Math.min(CHW-0.5, txR*3.8));
   const tz = p.side==='near' ? -(3+Math.random()*5) : (3+Math.random()*5);
-  // Auto-smash when jumping AND ball is high — natural smash mechanic
-  const isSmash = (p.jumpH > 0.25) && (B.pos.y > 1.7);
-  let arcH=1.6, spd=5.5;
-  if (isSmash){ arcH=0.4; spd=10.5; }
-  else if (KEYS.KeyQ){ arcH=2.2; spd=4.5; }
+  // Auto-smash when jumping AND ball is high
+  const isSmash = (p.jumpH > 0.25) && (B.pos.y > 1.6);
+  let arcH=1.6, spd=5.5, fromY=null;
+  if (isSmash){
+    // REAL SMASH: launch from up high, slam ball down deep into opponent's court
+    arcH = -1.8;                                  // strongly downward arc
+    spd  = 17;                                    // very fast
+    fromY = 1.9 + (p.jumpH || 0) * 1.6;            // start ABOVE the player (jump + reach)
+    // Override target to be deep in opponent's court (slam it past the service line)
+    const aimX = Math.max(-CHW+0.6, Math.min(CHW-0.6, txR*4.2));
+    const aimZ = p.side==='near' ? -(7 + Math.random()*3) : (7 + Math.random()*3);
+    p.swingT = 28;                                // longer swing animation
+    showMsg('🔥 SMASH!', 800);
+    B.launch(pi, aimX, aimZ, spd, arcH, fromY);
+    if (peerConn && isHost){ try{ peerConn.send({type:'hit', pi:pi, tx:aimX, tz:aimZ, spd:spd, arcH:arcH, y0:fromY}); }catch(_){} }
+    return;
+  }
+  if (KEYS.KeyQ){ arcH=2.2; spd=4.5; }
   else if (KEYS.KeyE){ arcH=1.0; spd=4.5; }
   else if (KEYS.KeyR){ arcH=5.0; spd=3.5; }
   else if (KEYS.KeyG){ arcH=0.7; spd=8.0; }
   spd *= 0.7 + q*0.58;
   B.launch(pi, tx, tz, spd, arcH);
-  if (isSmash) showMsg('🔥 SMASH!', 700);
   if (peerConn && isHost){ try{ peerConn.send({type:'hit', pi:pi, tx:tx, tz:tz, spd:spd, arcH:arcH}); }catch(_){} }
 }
 
