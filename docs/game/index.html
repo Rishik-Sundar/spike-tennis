@@ -60,6 +60,26 @@ canvas{display:block;position:fixed;inset:0;z-index:1}
 .dcard.med  .dlbl{color:#ffdc32;text-shadow:0 0 8px rgba(255,220,50,.4)}
 .dcard.hard .dlbl{color:#ff5050;text-shadow:0 0 8px rgba(255,80,80,.4)}
 
+/* ── Character selection ───────────── */
+#char-panel{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  z-index:109;background:rgba(5,8,15,.94);backdrop-filter:blur(4px)}
+#char-panel .inner{display:flex;flex-direction:column;align-items:center;gap:1.2rem;width:min(720px,94vw)}
+#char-panel h2{font-size:clamp(1.4rem,3.5vw,2rem);font-weight:900;letter-spacing:.06em;
+  background:linear-gradient(135deg,#fff 30%,#b2ff14);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+#char-panel .sub{font-size:.72rem;color:#637490;letter-spacing:.14em;margin-top:-.7rem}
+.char-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.8rem;width:100%}
+@media(max-width:600px){.char-grid{grid-template-columns:repeat(2,1fr)}}
+.char-card{background:rgba(12,18,32,.92);border:2px solid rgba(255,255,255,.07);border-radius:14px;
+  padding:1rem .8rem;display:flex;flex-direction:column;align-items:center;gap:.4rem;
+  cursor:pointer;user-select:none;transition:transform .18s,border-color .2s,box-shadow .2s}
+.char-card:hover{transform:translateY(-3px)}
+.char-card.selected{border-color:#b2ff14;box-shadow:0 0 32px rgba(178,255,20,.35);transform:translateY(-3px)}
+.char-prev{width:64px;height:64px;border-radius:8px}
+.char-name{font-size:.92rem;font-weight:700;letter-spacing:.08em}
+.char-info{font-size:.6rem;color:#637490;letter-spacing:.1em}
+#char-panel .actions{display:flex;gap:.7rem;width:100%;max-width:380px}
+
 /* ── Online panel ──────────────────── */
 #online-panel{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
   z-index:110;background:rgba(5,8,15,.94)}
@@ -126,7 +146,6 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
 </head>
 <body>
 
-<canvas id="cv"></canvas>
 <div class="grid-bg"></div>
 
 <!-- LOBBY -->
@@ -152,6 +171,19 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
       <div class="dcard hard" id="d-hard"><div class="dico">💀</div><div class="dlbl">HARD</div><div class="dsub">Pro-level AI</div></div>
     </div>
     <button class="gbtn" style="width:240px" id="d-back">← Back</button>
+  </div>
+</div>
+
+<!-- CHARACTER SELECTION -->
+<div id="char-panel">
+  <div class="inner">
+    <h2>CHOOSE YOUR PLAYER</h2>
+    <div class="sub">Tap a character to lock it in</div>
+    <div id="char-grid" class="char-grid"></div>
+    <div class="actions">
+      <button class="gbtn" id="c-back" style="flex:1">← Back</button>
+      <button class="abtn" id="c-go"   style="flex:2">START MATCH ▶</button>
+    </div>
   </div>
 </div>
 
@@ -200,7 +232,7 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
 
 <!-- Version + error overlay -->
 <div id="ver" style="position:fixed;bottom:6px;right:8px;z-index:200;font-size:.6rem;
-  color:#3a5a80;letter-spacing:.1em;pointer-events:none;font-family:monospace">v2-canvas</div>
+  color:#3a5a80;letter-spacing:.1em;pointer-events:none;font-family:monospace">v3-three</div>
 <div id="errbox" style="display:none;position:fixed;top:10px;left:50%;transform:translateX(-50%);
   z-index:300;background:#400;color:#ff8080;padding:10px 16px;border:1px solid #f55;
   border-radius:8px;font-family:monospace;font-size:.78rem;max-width:90vw;text-align:left;
@@ -213,6 +245,7 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
     b.textContent = 'JS ERROR: ' + (e.message || e) + '\n@ ' + (e.filename||'') + ':' + (e.lineno||'') + ':' + (e.colno||'');
   });
 </script>
+<script src="lib/three.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="src/game.js"></script>
 </body>
