@@ -484,8 +484,8 @@ function showTossUI(on, tn){
 }
 function setCtrlHint(){
   const hints = gMode==='local_1v1'
-    ? ['P1: WASD move · SPACE jump · CLICK hit', 'P2: Arrows move · ENTER hit', 'Right-click drag: orbit camera · Wheel: zoom']
-    : ['WASD move · SPACE jump · LSHIFT jump', 'CLICK or F: hit/serve', 'Right-click drag: orbit camera · Wheel: zoom'];
+    ? ['P1: WASD move · SPACE hit · LSHIFT/V jump', 'P2: Arrows move · ENTER hit · RSHIFT jump', 'Right-click drag: orbit camera · Wheel: zoom']
+    : ['WASD move · LSHIFT or V to JUMP', 'CLICK or SPACE: hit / serve', 'Right-click drag: orbit camera · Wheel: zoom'];
   document.getElementById('ctrl-hint').innerHTML = hints.join('<br>');
 }
 
@@ -530,10 +530,11 @@ function doJump(pi){
 document.addEventListener('keydown', e=>{
   if (gPhase==='lobby') return;
   KEYS[e.code] = true;
-  if (e.code==='Space')      { e.preventDefault(); doJump(0); onAction(0); }
+  if (e.code==='Space')      { e.preventDefault(); onAction(0); }
   else if (e.code==='Enter' || e.code==='NumpadEnter'){ e.preventDefault(); onAction(1); }
   else if (e.code==='ShiftLeft'){ e.preventDefault(); doJump(0); }
   else if (e.code==='ShiftRight'){ e.preventDefault(); doJump(gMode==='local_1v1'?1:0); }
+  else if (e.code==='KeyV'){ e.preventDefault(); doJump(0); }
   else if (e.code==='KeyF'){ e.preventDefault(); onAction(0); }
 });
 document.addEventListener('keyup', e=>{ delete KEYS[e.code]; });
@@ -781,8 +782,12 @@ function syncCharVisuals(){
     const walking = (p === P[0] && (KEYS.KeyA||KEYS.KeyD||KEYS.KeyW||KEYS.KeyS)) ||
                     (gMode==='local_1v1' && p === P[1] && (KEYS.ArrowLeft||KEYS.ArrowRight||KEYS.ArrowUp||KEYS.ArrowDown));
     const swing = walking ? Math.sin(p.walkT) * 0.5 : 0;
-    if (c.legL){ c.legL.rotation.x =  swing; c.legR.rotation.x = -swing; }
-    if (c.armL){ c.armL.rotation.x = -swing*0.6; }
+    const inAir = (p.jumpH || 0) > 0.05;
+    if (c.legL){
+      if (inAir){ c.legL.rotation.x = -0.4; c.legR.rotation.x = -0.4; }
+      else { c.legL.rotation.x =  swing; c.legR.rotation.x = -swing; }
+    }
+    if (c.armL){ c.armL.rotation.x = inAir ? -0.3 : -swing*0.6; }
     // Right arm swing on hit
     if (c.armR){
       const sw = p.swingT > 0 ? Math.sin((p.swingT/18)*Math.PI) : 0;
