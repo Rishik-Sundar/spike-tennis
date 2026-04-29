@@ -405,6 +405,15 @@ let activePL = [0,1], humanPL = [0], aiPL = [1];
 let srvMeter = 0, srvDir = 1, srvPower = 0, tossHit = false;
 let aiCDs = [0, 0, 0, 0];
 
+// Difficulty (Easy / Medium / Hard) — affects AI behavior
+const DIFF = {
+  easy:   { spdMult: 0.55, range: 4.0, reactCD: 38, missChance: 0.22, aimNoise: 2.4, power: 0.72, srvBaseCD: 90 },
+  medium: { spdMult: 1.00, range: 5.5, reactCD: 22, missChance: 0.06, aimNoise: 1.2, power: 1.00, srvBaseCD: 65 },
+  hard:   { spdMult: 1.40, range: 6.5, reactCD:  8, missChance: 0.00, aimNoise: 0.5, power: 1.30, srvBaseCD: 38 },
+};
+let difficulty = 'medium';
+let DIFF_CUR = DIFF.medium;
+
 // Online
 let peerConn = null, isHost = false;
 
@@ -590,13 +599,20 @@ function doHit(who) {
 
 // ── AI ────────────────────────────────────────────────
 function updateAI(dt) {
+  const D = DIFF_CUR;
   aiPL.forEach(pi => {
     const p = P[pi];
     const srv = SC.server === 0 ? 0 : 1;
 
     if (gPhase === 'serve_meter' && pi === srv) {
       aiCDs[pi] -= dt * 60;
-      if (aiCDs[pi] <= 0) { srvPower = 0.72 + Math.random() * 0.22; TOSS.start(p.x, p.z + (p.side === 'near' ? -0.3 : 0.3)); gPhase = 'serve_toss'; tossHit = false; showServeUI(false); aiCDs[pi] = 50; }
+      if (aiCDs[pi] <= 0) {
+        // Hard AI gets stronger serves; easy AI gets weaker ones
+        srvPower = (D.power < 1 ? 0.40 : D.power > 1.1 ? 0.85 : 0.65) + Math.random() * 0.18;
+        TOSS.start(p.x, p.z + (p.side === 'near' ? -0.3 : 0.3));
+        gPhase = 'serve_toss'; tossHit = false; showServeUI(false);
+        aiCDs[pi] = D.srvBaseCD;
+      }
       return;
     }
     if (gPhase === 'serve_toss' && pi === srv) {
@@ -604,7 +620,8 @@ function updateAI(dt) {
         tossHit = true; TOSS.stop(); P[pi].swingT = 18; P[pi].jumpH = 0.4;
         const tx = (Math.random() - 0.5) * 5;
         const tz = p.side === 'near' ? -SVC_Z * 0.7 : SVC_Z * 0.7;
-        B.launch(pi, tx, tz, 5 + Math.random() * 3, 1.4);
+        const srvSpd = (4 + Math.random() * 2) * D.power;
+        B.launch(pi, tx, tz, srvSpd, 1.4);
         gPhase = 'rally'; P[pi].serving = false;
         showTossUI(false);
       }
@@ -613,21 +630,31 @@ function updateAI(dt) {
     if (gPhase !== 'rally' || !B.active) return;
 
     const onMySide = p.side === 'near' ? B.pos.z > 0 : B.pos.z < 0;
-    // Move toward ball x
+
+    // Move toward ball x — speed scaled by difficulty
     const dx = B.pos.x - p.x;
-    const spd2 = Math.abs(dx) > 1.5 ? p.sprintSpd : p.speed;
+    const baseSpd = Math.abs(dx) > 1.5 ? p.sprintSpd : p.speed;
+    const spd2 = baseSpd * D.spdMult;
     if (Math.abs(dx) > 0.08) p.x += Math.sign(dx) * Math.min(Math.abs(dx), spd2 * dt);
     p.x = Math.max(-CHW + 0.4, Math.min(CHW - 0.4, p.x));
 
     if (aiCDs[pi] > 0) { aiCDs[pi] -= dt * 60; }
     if (onMySide && aiCDs[pi] <= 0 && B.pos.y < 2.2 && p.hitCD <= 0) {
       const dist = new THREE.Vector3(p.x, 0, p.z).distanceTo(new THREE.Vector3(B.pos.x, 0, B.pos.z));
-      if (dist < 5.5) {
+      if (dist < D.range) {
+        // Easy AI sometimes whiffs the ball entirely
+        if (Math.random() < D.missChance) {
+          aiCDs[pi] = D.reactCD * 0.6; // brief recovery, ball passes
+          return;
+        }
         p.swingT = 16; p.hitCD = 28;
-        const tx = (Math.random() - 0.5) * 6;
+        // Aim noise: hard AI places shots accurately, easy AI is wild
+        const tx = (Math.random() - 0.5) * (3 + D.aimNoise * 2);
         const tz = p.side === 'near' ? -(3 + Math.random() * 5) : (3 + Math.random() * 5);
-        B.launch(pi, tx, tz, 4.5 + Math.random() * 2, 1.4 + Math.random() * 0.8);
-        aiCDs[pi] = 20;
+        const spd  = (4.5 + Math.random() * 2) * D.power;
+        const arcH = 1.4 + Math.random() * 0.8;
+        B.launch(pi, tx, tz, spd, arcH);
+        aiCDs[pi] = D.reactCD;
       }
     }
     if (p.hitCD > 0) p.hitCD -= dt * 60;
@@ -764,12 +791,15 @@ function setupMode(mode) {
 }
 
 // ── Public API (called from HTML) ─────────────────────
-function startMode(mode, conn, host) {
+function startMode(mode, conn, host, diff) {
   peerConn = conn || null;
   isHost = host || false;
+  difficulty = diff && DIFF[diff] ? diff : 'medium';
+  DIFF_CUR = DIFF[difficulty];
   setupMode(mode);
   SC.reset();
   document.getElementById('lobby').style.display = 'none';
+  document.getElementById('diff-panel').style.display = 'none';
   showHUD(true);
   gPhase = 'countdown'; cdVal = 3; cdTimer = 0;
   showMsg('3', 0.9);
@@ -780,6 +810,7 @@ function goLobby() {
   B.active = false; TOSS.stop();
   showHUD(false); showServeUI(false); showTossUI(false);
   $bigmsg.style.display = 'none';
+  const dp = document.getElementById('diff-panel'); if (dp) dp.style.display = 'none';
   document.getElementById('lobby').style.display = 'flex';
 }
 
@@ -789,7 +820,10 @@ function onPeerData(d) {
 }
 
 window.game = { startMode, goLobby, onPeerData };
-if (window._pendingMode) { startMode(window._pendingMode); window._pendingMode = null; }
+if (window._pendingMode) {
+  startMode(window._pendingMode, undefined, undefined, window._pendingDiff);
+  window._pendingMode = null; window._pendingDiff = null;
+}
 
 // ── Main loop ─────────────────────────────────────────
 const clock = new THREE.Clock();

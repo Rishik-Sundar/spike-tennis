@@ -44,6 +44,35 @@ canvas{display:block;width:100vw!important;height:100vh!important}
 .card .lbl{font-size:.88rem;font-weight:700;color:#fff;letter-spacing:.04em}
 .card .sub{font-size:.68rem;color:#637490;text-align:center;line-height:1.5}
 
+/* ── Difficulty panel ──────────────────────────────── */
+#diff-panel{
+  position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  z-index:108;background:rgba(5,8,15,.92);backdrop-filter:blur(4px);
+}
+#diff-panel .inner{display:flex;flex-direction:column;align-items:center;gap:1.4rem;width:min(560px,92vw)}
+#diff-panel h2{font-size:clamp(1.4rem,3.5vw,2rem);font-weight:900;letter-spacing:.06em;
+  background:linear-gradient(135deg,#fff 30%,#00b4ff);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+#diff-panel .sub{font-size:.78rem;color:#637490;letter-spacing:.14em;margin-top:-1rem}
+.diff-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.8rem;width:100%}
+.dcard{
+  background:rgba(12,18,32,.92);border:1.5px solid rgba(255,255,255,.07);
+  border-radius:14px;padding:1.4rem .9rem;
+  display:flex;flex-direction:column;align-items:center;gap:.45rem;
+  cursor:pointer;user-select:none;
+  transition:transform .18s,border-color .2s,box-shadow .2s;
+}
+.dcard:hover,.dcard:active{transform:translateY(-3px)}
+.dcard.easy:hover  {border-color:#60ff80;box-shadow:0 0 28px rgba(96,255,128,.28)}
+.dcard.med:hover   {border-color:#ffdc32;box-shadow:0 0 28px rgba(255,220,50,.25)}
+.dcard.hard:hover  {border-color:#ff5050;box-shadow:0 0 28px rgba(255,80,80,.28)}
+.dcard .dico{font-size:1.9rem}
+.dcard .dlbl{font-size:.95rem;font-weight:700;color:#fff;letter-spacing:.08em}
+.dcard .dsub{font-size:.65rem;color:#637490;text-align:center;line-height:1.5}
+.dcard.easy .dlbl{color:#60ff80;text-shadow:0 0 8px rgba(96,255,128,.4)}
+.dcard.med  .dlbl{color:#ffdc32;text-shadow:0 0 8px rgba(255,220,50,.4)}
+.dcard.hard .dlbl{color:#ff5050;text-shadow:0 0 8px rgba(255,80,80,.4)}
+
 /* ── Online panel ──────────────────────────────────── */
 #online-panel{
   position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:110;
@@ -166,6 +195,32 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
   </div>
 </div>
 
+<!-- DIFFICULTY PANEL -->
+<div id="diff-panel">
+  <div class="inner">
+    <h2>SELECT DIFFICULTY</h2>
+    <div class="sub" id="diff-modename">VS AI</div>
+    <div class="diff-grid">
+      <div class="dcard easy" id="d-easy">
+        <div class="dico">😎</div>
+        <div class="dlbl">EASY</div>
+        <div class="dsub">Slow AI · easy returns<br>Just chillin'</div>
+      </div>
+      <div class="dcard med" id="d-med">
+        <div class="dico">🔥</div>
+        <div class="dlbl">MEDIUM</div>
+        <div class="dsub">Balanced rallies<br>Real tennis feel</div>
+      </div>
+      <div class="dcard hard" id="d-hard">
+        <div class="dico">💀</div>
+        <div class="dlbl">HARD</div>
+        <div class="dsub">Pro-level AI<br>Don't blink</div>
+      </div>
+    </div>
+    <button class="gbtn" style="width:240px" onclick="closeDiff()">← Back</button>
+  </div>
+</div>
+
 <!-- ONLINE PANEL -->
 <div id="online-panel">
   <div class="obox">
@@ -215,19 +270,52 @@ input.ci::placeholder{color:#3a5060;letter-spacing:.08em;font-size:.85rem}
 <div id="bigmsg"></div>
 <button id="back-btn" onclick="window.game&&window.game.goLobby()">← LOBBY</button>
 
-<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script>
+// Fail-safe: if Three.js failed to load, show a visible error
+window.addEventListener('load', ()=>{
+  if (typeof THREE === 'undefined'){
+    document.body.innerHTML = '<div style="color:#ff5050;font-family:Orbitron,sans-serif;'+
+      'padding:40px;text-align:center;font-size:1rem">⚠ Failed to load Three.js. '+
+      'Check your internet connection and refresh.</div>';
+  }
+});
+</script>
 <script src="src/game.js"></script>
 
 <script>
 // Lobby button wiring — use pending queue so clicks work even if game.js is still loading
-function selectMode(m){
-  if(window.game){ window.game.startMode(m); }
-  else { window._pendingMode = m; }
+function selectMode(m, diff){
+  if(window.game){ window.game.startMode(m, undefined, undefined, diff); }
+  else { window._pendingMode = m; window._pendingDiff = diff; }
 }
-document.getElementById('m-ai').onclick     = ()=>selectMode('ai_1v1');
+
+// AI modes go through difficulty selection first
+let pendingAIMode = null;
+function openDiff(mode, label){
+  pendingAIMode = mode;
+  document.getElementById('diff-modename').textContent = label;
+  document.getElementById('diff-panel').style.display = 'flex';
+  document.getElementById('lobby').style.display = 'none';
+}
+function closeDiff(){
+  document.getElementById('diff-panel').style.display = 'none';
+  document.getElementById('lobby').style.display = 'flex';
+  pendingAIMode = null;
+}
+function pickDiff(d){
+  document.getElementById('diff-panel').style.display = 'none';
+  selectMode(pendingAIMode, d);
+  pendingAIMode = null;
+}
+
+document.getElementById('m-ai').onclick     = ()=>openDiff('ai_1v1','1V1 VS AI');
 document.getElementById('m-local').onclick  = ()=>selectMode('local_1v1');
-document.getElementById('m-2v2').onclick    = ()=>selectMode('ai_2v2');
+document.getElementById('m-2v2').onclick    = ()=>openDiff('ai_2v2','2V2 VS AI');
 document.getElementById('m-online').onclick = ()=>openOnline();
+document.getElementById('d-easy').onclick   = ()=>pickDiff('easy');
+document.getElementById('d-med').onclick    = ()=>pickDiff('medium');
+document.getElementById('d-hard').onclick   = ()=>pickDiff('hard');
 
 let myPeer=null, pConn=null;
 function openOnline(){
@@ -249,30 +337,44 @@ function swTab(t){
   if(t==='h')initHost();
 }
 function setSt(id,msg,cls){const e=document.getElementById(id);e.textContent=msg;e.className='st'+(cls?' '+cls:'');}
+// Generate a short, readable room code (no confusing chars)
+function genCode(){
+  const chars='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let s='spk-'; // namespace prefix to avoid collisions with random global peer IDs
+  for(let i=0;i<6;i++) s+=chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
 function initHost(){
   document.getElementById('rcode').textContent='– – – –';
   setSt('hst','Connecting…','');
   if(myPeer){try{myPeer.destroy();}catch(e){}myPeer=null;}
+  let attempts=0;
   function tryCreate(){
     if(typeof Peer==='undefined'){setTimeout(tryCreate,300);return;}
-    myPeer=new Peer();
+    if(attempts++>5){setSt('hst','Could not get a code. Refresh and try again.','err');return;}
+    const code=genCode();
+    myPeer=new Peer(code);
     myPeer.on('open',id=>{
-      document.getElementById('rcode').textContent=id.slice(0,6).toUpperCase();
+      document.getElementById('rcode').textContent=id.replace('spk-','').toUpperCase();
       setSt('hst','Waiting for opponent…','');
     });
     myPeer.on('connection',conn=>{
       pConn=conn;
       setSt('hst','Opponent connected! Starting…','ok');
-      conn.on('data',d=>window.game?.onPeerData(d));
-      setTimeout(()=>{closeOnline();selectMode('online');window.game&&(window.game._onlineConn={conn,host:true});},1200);
+      conn.on('open',()=>conn.on('data',d=>window.game?.onPeerData(d)));
+      setTimeout(()=>{closeOnline();window.game?.startMode('online',conn,true);},1200);
     });
-    myPeer.on('error',e=>{setSt('hst','Connection error ('+e.type+'). Try refreshing.','err');});
+    myPeer.on('error',e=>{
+      if(e.type==='unavailable-id'){try{myPeer.destroy();}catch(_){}; tryCreate(); return;}
+      setSt('hst','Connection error ('+e.type+'). Try refreshing.','err');
+    });
   }
   tryCreate();
 }
 function joinRoom(){
-  const code=document.getElementById('jin').value.trim().toLowerCase();
-  if(code.length<4){setSt('jst','Enter a valid code','err');return;}
+  const raw=document.getElementById('jin').value.trim().toUpperCase();
+  if(raw.length<4){setSt('jst','Enter a valid code','err');return;}
+  const code='spk-'+raw;
   setSt('jst','Connecting…','');
   if(myPeer){try{myPeer.destroy();}catch(e){}myPeer=null;}
   function tryJoin(){
@@ -286,8 +388,12 @@ function joinRoom(){
         setTimeout(()=>{closeOnline();window.game?.startMode('online',pConn,false);},1200);
       });
       pConn.on('error',()=>setSt('jst','Could not connect. Check the code.','err'));
+      // If host doesn't exist, peer fires 'peer-unavailable' on myPeer
     });
-    myPeer.on('error',e=>setSt('jst','Error: '+e.type+'. Try again.','err'));
+    myPeer.on('error',e=>{
+      if(e.type==='peer-unavailable'){setSt('jst','Room not found. Check the code.','err');return;}
+      setSt('jst','Error: '+e.type+'. Try again.','err');
+    });
   }
   tryJoin();
 }
