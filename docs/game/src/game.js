@@ -412,31 +412,30 @@ function updateRing3d(){
   ring3d.scale.setScalar(ringR/0.7 * 1.4);
 }
 
-// ── Camera (Roblox-style orbit, but biased forward for tennis) ──
-const CAM = { yaw:0, pitch:0.45, dist:8.5, tx:0, ty:1.4, tz:5 };
+// ── Camera (Roblox-style orbit) ───────────────────────
+// Target is a point ~3 units in front of P1 toward the net,
+// so when yaw=0 the camera sits behind P1 and shows the court ahead.
+const CAM = { yaw:0, pitch:0.42, dist:9.0, tx:0, ty:1.4, tz:6 };
 function updateCamera(){
   const p0 = P[0];
-  // Target = forward of player (toward net) so we look down the court instead of at the player's back
-  // P1 plays on near side (z>0). "Forward" for them is -z. So target is at z = p0.z - 4.
-  const tgtZ = (p0.z > 0 ? p0.z - 4 : p0.z + 4);
-  CAM.tx += (p0.x*0.7      - CAM.tx) * 0.12;
-  CAM.ty += (1.4 + (p0.jumpH||0)*0.35 - CAM.ty) * 0.08;
-  CAM.tz += (tgtZ          - CAM.tz) * 0.12;
-
+  // Target = midway between P1 and the net (P1 always has z>=0.5)
+  const tgtX = p0.x * 0.6;
+  const tgtY = 1.3 + (p0.jumpH||0)*0.3;
+  const tgtZ = Math.max(0, p0.z - 3);  // 3 units in front of P1 toward net (clamped)
+  CAM.tx += (tgtX - CAM.tx) * 0.12;
+  CAM.ty += (tgtY - CAM.ty) * 0.08;
+  CAM.tz += (tgtZ - CAM.tz) * 0.12;
   const sy = Math.sin(CAM.yaw),  cy = Math.cos(CAM.yaw);
   const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
-  // For near-side player, default yaw=0 should put camera at +z (behind them)
-  const sideSign = (p0.z >= 0 ? 1 : -1);
   camera.position.set(
     CAM.tx + CAM.dist*cp*sy,
     CAM.ty + CAM.dist*sp,
-    CAM.tz + CAM.dist*cp*cy*sideSign
+    CAM.tz + CAM.dist*cp*cy   // yaw=0 → camera at +z (behind P1, since P1 is at +z)
   );
   camera.lookAt(CAM.tx, CAM.ty, CAM.tz);
 }
-// Initialize camera position once at startup
 function initCamera(){
-  CAM.tx = 0; CAM.ty = 1.4; CAM.tz = 5;
+  CAM.tx = 0; CAM.ty = 1.4; CAM.tz = 6;
   const sy = Math.sin(CAM.yaw), cy = Math.cos(CAM.yaw);
   const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
   camera.position.set(CAM.tx + CAM.dist*cp*sy, CAM.ty + CAM.dist*sp, CAM.tz + CAM.dist*cp*cy);
@@ -641,25 +640,32 @@ function doHit(who){
   const pi = who===0?0:1;
   if (humanPL.indexOf(pi)<0) return;
   const p = P[pi];
-  if (p.hitCD>0) return;
+  // Block spam: must be off cooldown AND not mid-swing
+  if (p.hitCD>0 || p.swingT>0) return;
   const onMySide = p.side==='near' ? B.pos.z>0 : B.pos.z<0;
   if (!onMySide) return;
+  // Must be near the ball — REAL distance, not just a cap
   const dx=p.x-B.pos.x, dz=p.z-B.pos.z;
   const dist = Math.sqrt(dx*dx+dz*dz);
-  if (dist > 5) return;
-  const q = ringActive?ringQuality():0.42;
+  if (dist > 4.0) return;          // tighter range so you actually have to move
+  if (B.pos.y > 3.5) return;       // ball too high to reach
+  const q = ringActive?ringQuality():0.38;
   ringActive=false;
-  p.swingT=18; p.hitCD=22;
+  p.swingT=22; p.hitCD=42;          // longer cooldown — no F spamming
   const txR = (mX/innerWidth)*2-1;
   const tx = Math.max(-CHW+0.5, Math.min(CHW-0.5, txR*3.8));
   const tz = p.side==='near' ? -(3+Math.random()*5) : (3+Math.random()*5);
+  // Auto-smash when jumping AND ball is high — natural smash mechanic
+  const isSmash = (p.jumpH > 0.25) && (B.pos.y > 1.7);
   let arcH=1.6, spd=5.5;
-  if (KEYS.KeyQ){ arcH=2.2; spd=4.5; }
+  if (isSmash){ arcH=0.4; spd=10.5; }
+  else if (KEYS.KeyQ){ arcH=2.2; spd=4.5; }
   else if (KEYS.KeyE){ arcH=1.0; spd=4.5; }
   else if (KEYS.KeyR){ arcH=5.0; spd=3.5; }
-  else if (KEYS.KeyG){ arcH=0.7; spd=8.0; p.jumpVel=4; }
+  else if (KEYS.KeyG){ arcH=0.7; spd=8.0; }
   spd *= 0.7 + q*0.58;
   B.launch(pi, tx, tz, spd, arcH);
+  if (isSmash) showMsg('🔥 SMASH!', 700);
   if (peerConn && isHost){ try{ peerConn.send({type:'hit', pi:pi, tx:tx, tz:tz, spd:spd, arcH:arcH}); }catch(_){} }
 }
 
@@ -794,7 +800,7 @@ function syncCharVisuals(){
     if (!c) continue;
     c.group.position.set(p.x, p.jumpH || 0, p.z);
     // Face the right way (near players face -z, far face +z)
-    c.group.rotation.y = p.side==='near' ? 0 : Math.PI;
+    c.group.rotation.y = p.side==='near' ? Math.PI : 0;
     // Walking animation (legs swing)
     const walking = (p === P[0] && (KEYS.KeyA||KEYS.KeyD||KEYS.KeyW||KEYS.KeyS)) ||
                     (gMode==='local_1v1' && p === P[1] && (KEYS.ArrowLeft||KEYS.ArrowRight||KEYS.ArrowUp||KEYS.ArrowDown));
@@ -925,9 +931,9 @@ function animate(){
   if (gPhase==='countdown') updateCountdown(dt);
 
   if (gPhase==='serve_meter'){
-    srvMeter += srvDir * 0.008 * (dt*60);
-    if (srvMeter>=1){ srvMeter=1; srvDir=-1; }
-    if (srvMeter<=0){ srvMeter=0; srvDir=1; }
+    // One-way fill, faster, loops 0→100→0
+    srvMeter += 0.022 * (dt*60);
+    if (srvMeter >= 1) srvMeter = 0;
     updateServeMeter(srvMeter);
     updateAI(dt);
   }
