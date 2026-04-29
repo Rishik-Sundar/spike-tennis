@@ -412,22 +412,37 @@ function updateRing3d(){
   ring3d.scale.setScalar(ringR/0.7 * 1.4);
 }
 
-// ── Camera (Roblox-style orbit) ──────────────────────
-const CAM = { yaw:0, pitch:0.42, dist:7.2, tx:0, ty:1.6, tz:9 };
+// ── Camera (Roblox-style orbit, but biased forward for tennis) ──
+const CAM = { yaw:0, pitch:0.45, dist:8.5, tx:0, ty:1.4, tz:5 };
 function updateCamera(){
   const p0 = P[0];
-  CAM.tx += (p0.x - CAM.tx) * 0.13;
-  CAM.ty += (1.5 + (p0.jumpH||0)*0.45 - CAM.ty) * 0.10;
-  CAM.tz += (p0.z - CAM.tz) * 0.13;
+  // Target = forward of player (toward net) so we look down the court instead of at the player's back
+  // P1 plays on near side (z>0). "Forward" for them is -z. So target is at z = p0.z - 4.
+  const tgtZ = (p0.z > 0 ? p0.z - 4 : p0.z + 4);
+  CAM.tx += (p0.x*0.7      - CAM.tx) * 0.12;
+  CAM.ty += (1.4 + (p0.jumpH||0)*0.35 - CAM.ty) * 0.08;
+  CAM.tz += (tgtZ          - CAM.tz) * 0.12;
+
   const sy = Math.sin(CAM.yaw),  cy = Math.cos(CAM.yaw);
   const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
+  // For near-side player, default yaw=0 should put camera at +z (behind them)
+  const sideSign = (p0.z >= 0 ? 1 : -1);
   camera.position.set(
     CAM.tx + CAM.dist*cp*sy,
     CAM.ty + CAM.dist*sp,
-    CAM.tz + CAM.dist*cp*cy
+    CAM.tz + CAM.dist*cp*cy*sideSign
   );
   camera.lookAt(CAM.tx, CAM.ty, CAM.tz);
 }
+// Initialize camera position once at startup
+function initCamera(){
+  CAM.tx = 0; CAM.ty = 1.4; CAM.tz = 5;
+  const sy = Math.sin(CAM.yaw), cy = Math.cos(CAM.yaw);
+  const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
+  camera.position.set(CAM.tx + CAM.dist*cp*sy, CAM.ty + CAM.dist*sp, CAM.tz + CAM.dist*cp*cy);
+  camera.lookAt(CAM.tx, CAM.ty, CAM.tz);
+}
+initCamera();
 
 // Camera-relative forward/right (for WASD movement)
 function camForwardRight(){
@@ -905,7 +920,7 @@ function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
   frameN++;
 
-  if (gPhase==='lobby'){ renderer.render(scene, camera); return; }
+  if (gPhase==='lobby'){ updateCamera(); renderer.render(scene, camera); return; }
 
   if (gPhase==='countdown') updateCountdown(dt);
 
