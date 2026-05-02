@@ -226,11 +226,13 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
 <div id="lobby">
   <div class="logo">SPIKE TENNIS</div>
   <div class="tagline">SELECT GAME MODE</div>
-  <div class="mode-grid">
+  <div class="mode-grid" style="grid-template-columns:1fr 1fr 1fr">
     <div class="card blue"   id="m-ai"><div class="ico">🤖</div><div class="lbl">1v1 vs AI</div><div class="sub">Solo match vs computer.</div></div>
     <div class="card green"  id="m-local"><div class="ico">👥</div><div class="lbl">1v1 Local</div><div class="sub">Same screen.<br>P1: WASD · P2: Arrows</div></div>
     <div class="card purple" id="m-2v2"><div class="ico">⚡</div><div class="lbl">2v2 vs AI</div><div class="sub">You + AI partner vs 2 AI.</div></div>
     <div class="card orange" id="m-online"><div class="ico">🌐</div><div class="lbl">Play Online</div><div class="sub">Host or join with a code.</div></div>
+    <div class="card blue"   id="m-practice"><div class="ico">🎯</div><div class="lbl">Practice</div><div class="sub">Hit the rings · 60-second high score chase.</div></div>
+    <div class="card green"  id="m-tournament"><div class="ico">🏆</div><div class="lbl">Tournament</div><div class="sub">5 escalating opponents — Easy → Hard.</div></div>
   </div>
 </div>
 
@@ -303,6 +305,9 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
 </div>
 <div id="bigmsg"></div>
 <button id="back-btn">← LOBBY</button>
+<button id="replay-btn" style="position:fixed;top:10px;left:120px;z-index:60;background:rgba(0,0,0,.55);
+  border:1px solid rgba(178,255,20,.35);color:#b2ff14;font-family:'Orbitron',sans-serif;font-size:.62rem;
+  padding:.35rem .8rem;border-radius:6px;cursor:pointer;display:none;pointer-events:all">▶ REPLAY</button>
 
 <!-- CORNER TOOLBAR -->
 <div id="corner-tools">

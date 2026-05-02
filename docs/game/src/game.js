@@ -317,6 +317,7 @@ function rebuildChar(pi){
   scene.remove(chars[pi].group);
   chars[pi] = buildChar(CHARS[pCharIdx[pi] % CHARS.length]);
   scene.add(chars[pi].group);
+  if (typeof Nametags !== 'undefined' && Nametags.rebuild) Nametags.rebuild(pi);
 }
 
 // ── Ball ──────────────────────────────────────────────
@@ -1033,6 +1034,590 @@ const SETTINGS = {
 };
 SETTINGS.load();
 
+// ── Replay system (rolling buffer of ball + player positions) ──
+const ReplaySys = (function(){
+  const MAX_FRAMES = 360; // ~6 seconds @ 60fps
+  const buffer = [];
+  let recording = true;
+  let playing = false;
+  let playIdx = 0;
+
+  function record(){
+    if (!recording || playing) return;
+    if (!B.active && !TOSS.active) return;
+    const frame = {
+      bx: B.pos.x, by: B.pos.y, bz: B.pos.z,
+      bvx: B.vel.x, bvy: B.vel.y, bvz: B.vel.z,
+      bact: B.active, btact: TOSS.active,
+      ttx: TOSS.x, ttz: TOSS.z, tty: TOSS.y,
+      players: P.map(function(p){ return { x:p.x, z:p.z, jh:p.jumpH||0, sw:p.swingT||0 }; })
+    };
+    buffer.push(frame);
+    if (buffer.length > MAX_FRAMES) buffer.shift();
+  }
+
+  function startPlayback(){
+    if (buffer.length < 5) return false;
+    playing = true; recording = false; playIdx = 0;
+    return true;
+  }
+
+  function stopPlayback(){
+    playing = false; recording = true; playIdx = 0;
+  }
+
+  function tick(){
+    if (!playing) return;
+    if (playIdx >= buffer.length){ stopPlayback(); return; }
+    const f = buffer[playIdx++];
+    B.pos.set(f.bx, f.by, f.bz);
+    B.vel.set(f.bvx, f.bvy, f.bvz);
+    B.active = f.bact;
+    ballMesh.position.copy(B.pos);
+    ballLight.position.copy(B.pos);
+    if (f.btact){
+      tossMesh.visible = true;
+      tossMesh.position.set(f.ttx, f.tty + 0.18, f.ttz);
+    } else {
+      tossMesh.visible = false;
+    }
+    for (let i=0; i<f.players.length && i<P.length; i++){
+      P[i].x = f.players[i].x;
+      P[i].z = f.players[i].z;
+      P[i].jumpH = f.players[i].jh;
+    }
+  }
+
+  function isPlaying(){ return playing; }
+  function clear(){ buffer.length = 0; }
+
+  return {
+    record: record, startPlayback: startPlayback, stopPlayback: stopPlayback,
+    tick: tick, isPlaying: isPlaying, clear: clear,
+    bufferSize: function(){ return buffer.length; }
+  };
+})();
+
+// ── Power-up pickups (small spinning boxes on court) ──
+const PowerUps = (function(){
+  const TYPES = [
+    { id:'speed',  color: 0x00ff80, label:'⚡ SPEED',     msg:'⚡ SPEED BOOST!',   apply: function(p){ p._buffSpeed = 4; } },
+    { id:'power',  color: 0xff5060, label:'💪 POWER',     msg:'💪 POWER UP!',      apply: function(p){ p._buffPower = 4; } },
+    { id:'jump',   color: 0xffe040, label:'⬆ HIGH JUMP', msg:'⬆ MEGA JUMP!',     apply: function(p){ p._buffJump = 5; } },
+    { id:'aim',    color: 0xa050ff, label:'🎯 AIM',       msg:'🎯 LASER AIM!',     apply: function(p){ p._buffAim = 5; } },
+    { id:'time',   color: 0x00b4ff, label:'⏱ SLOW TIME', msg:'⏱ SLO-MO!',         apply: function(p){ if (typeof window !== 'undefined'){ window._timeFactor = 0.5; setTimeout(function(){ window._timeFactor = 1; }, 2200); } } },
+  ];
+  const active = []; // { mesh, type, x, z, age }
+  const SPAWN_INTERVAL = 12;  // seconds between spawns
+  let spawnTimer = SPAWN_INTERVAL;
+  let enabled = false;
+
+  function spawnOne(){
+    const t = TYPES[Math.floor(Math.random() * TYPES.length)];
+    const x = (Math.random() - 0.5) * (CW - 2);
+    const side = Math.random() < 0.5 ? 1 : -1;
+    const z = side * (1 + Math.random() * (CHL - 4));
+    const m = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.42, 0),
+      new THREE.MeshStandardMaterial({ color: t.color, emissive: t.color, emissiveIntensity: 1.4, roughness: 0.3 })
+    );
+    m.position.set(x, 0.6, z);
+    m.castShadow = true;
+    scene.add(m);
+    active.push({ mesh: m, type: t, x: x, z: z, age: 0 });
+  }
+
+  function clearAll(){
+    for (let i=0; i<active.length; i++) scene.remove(active[i].mesh);
+    active.length = 0;
+  }
+
+  function setEnabled(on){
+    enabled = !!on;
+    if (!enabled) clearAll();
+    spawnTimer = SPAWN_INTERVAL;
+  }
+
+  function update(dt){
+    if (!enabled) return;
+    spawnTimer -= dt;
+    if (spawnTimer <= 0 && active.length < 3){ spawnOne(); spawnTimer = SPAWN_INTERVAL; }
+    for (let i=active.length-1; i>=0; i--){
+      const pu = active[i];
+      pu.age += dt;
+      pu.mesh.rotation.y += dt * 2.0;
+      pu.mesh.rotation.x += dt * 1.4;
+      pu.mesh.position.y = 0.6 + Math.sin(pu.age * 3) * 0.08;
+      // Despawn after 18 seconds
+      if (pu.age > 18){ scene.remove(pu.mesh); active.splice(i, 1); continue; }
+      // Pickup test (P[0] only for simplicity)
+      const dx = P[0].x - pu.x, dz = P[0].z - pu.z;
+      if (dx*dx + dz*dz < 1.0){
+        try { pu.type.apply(P[0]); } catch(_){}
+        showMsg(pu.type.msg, 1100);
+        AudioSys.score();
+        ParticleSys.pickupBurst(pu.x, 0.6, pu.z, pu.type.color);
+        scene.remove(pu.mesh); active.splice(i, 1);
+      }
+    }
+    // Decay buffs
+    for (let i=0; i<P.length; i++){
+      const p = P[i];
+      ['_buffSpeed','_buffPower','_buffJump','_buffAim'].forEach(function(k){
+        if (p[k]){ p[k] -= dt; if (p[k] <= 0) delete p[k]; }
+      });
+    }
+  }
+
+  return { update: update, setEnabled: setEnabled, clearAll: clearAll };
+})();
+
+// ── Day/night cycle (slowly rotates the sun + tints ambient) ──
+const DayNight = (function(){
+  let t = 0;
+  let enabled = false;
+  function setEnabled(on){ enabled = !!on; if (!on) reset(); }
+  function reset(){
+    t = 0;
+    sun.position.set(8, 22, 10);
+    sun.intensity = 1.2;
+  }
+  function update(dt){
+    if (!enabled) return;
+    t += dt * 0.05;
+    const angle = t;
+    sun.position.set(Math.cos(angle) * 22, Math.max(2, Math.sin(angle) * 22), 10);
+    const dayness = (Math.sin(angle) + 1) / 2;
+    sun.intensity = 0.4 + dayness * 1.2;
+  }
+  return { update: update, setEnabled: setEnabled, reset: reset };
+})();
+
+// ── Floor decals (ball mark trail where the ball bounces) ──
+const FloorMarks = (function(){
+  const POOL = 14;
+  const pool = [];
+  const geo = new THREE.CircleGeometry(0.18, 14);
+  for (let i=0; i<POOL; i++){
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0x000000, transparent: true, opacity: 0
+    }));
+    m.rotation.x = -Math.PI / 2;
+    m.position.y = 0.012;
+    m.visible = false;
+    scene.add(m);
+    pool.push({ mesh: m, life: 0 });
+  }
+  let nextIdx = 0;
+
+  function add(x, z){
+    const p = pool[nextIdx];
+    nextIdx = (nextIdx + 1) % POOL;
+    p.mesh.position.set(x, 0.012, z);
+    p.mesh.visible = true;
+    p.mesh.material.opacity = 0.45;
+    p.life = 5.0;
+  }
+  function update(dt){
+    for (let i=0; i<POOL; i++){
+      const p = pool[i];
+      if (!p.mesh.visible) continue;
+      p.life -= dt;
+      if (p.life <= 0){ p.mesh.visible = false; continue; }
+      p.mesh.material.opacity = 0.45 * (p.life / 5.0);
+    }
+  }
+  function clearAll(){
+    for (let i=0; i<POOL; i++){ pool[i].mesh.visible = false; pool[i].life = 0; }
+  }
+  return { add: add, update: update, clearAll: clearAll };
+})();
+
+// ── Footstep dust (when the human player runs) ──
+const Footsteps = (function(){
+  let stepTimer = 0;
+  function update(dt, p, isMoving){
+    if (!isMoving) { stepTimer = 0; return; }
+    stepTimer -= dt;
+    if (stepTimer <= 0){
+      stepTimer = 0.18;
+      ParticleSys.spawn(p.x + (Math.random()-0.5)*0.3, 0.05, p.z + (Math.random()-0.5)*0.3, {
+        count: 3, speed: 1.0, color: 0xccddee, upBias: 0.3, lifeMin: 0.18, lifeMax: 0.32
+      });
+    }
+  }
+  return { update: update };
+})();
+
+// ── Floating nametags (canvas texture sprites above each character) ──
+const Nametags = (function(){
+  const sprites = [];
+
+  function makeTextSprite(text, color){
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 80;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, 256, 80);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, 252, 76);
+    ctx.fillStyle = color;
+    ctx.font = 'bold 36px Orbitron, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 16;
+    ctx.fillText(text, 128, 40);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(2.4, 0.75, 1);
+    return { sprite: sprite, tex: tex, canvas: canvas, ctx: ctx };
+  }
+
+  function setup(){
+    for (let i=0; i<P.length; i++){
+      const c = CHARS[pCharIdx[i] % CHARS.length];
+      const ns = makeTextSprite(c.name, c.col);
+      ns.sprite.visible = false;
+      scene.add(ns.sprite);
+      sprites.push(ns);
+    }
+  }
+
+  function update(){
+    for (let i=0; i<sprites.length; i++){
+      const ns = sprites[i];
+      const visible = chars[i] && chars[i].group && chars[i].group.visible;
+      ns.sprite.visible = !!visible;
+      if (!visible) continue;
+      const cg = chars[i].group;
+      ns.sprite.position.set(cg.position.x, (cg.position.y || 0) + 3.5, cg.position.z);
+    }
+  }
+
+  function rebuild(idx){
+    if (!sprites[idx]) return;
+    scene.remove(sprites[idx].sprite);
+    const c = CHARS[pCharIdx[idx] % CHARS.length];
+    const ns = makeTextSprite(c.name, c.col);
+    ns.sprite.visible = false;
+    scene.add(ns.sprite);
+    sprites[idx] = ns;
+  }
+
+  return { setup: setup, update: update, rebuild: rebuild };
+})();
+
+// ── Mini-map radar (small canvas overlay showing player + ball positions) ──
+const Radar = (function(){
+  let canvas = null, ctx = null;
+
+  function init(){
+    canvas = document.createElement('canvas');
+    canvas.width = 140; canvas.height = 280;
+    canvas.style.cssText = 'position:fixed;bottom:80px;right:14px;z-index:50;' +
+      'border:1px solid rgba(0,180,255,.35);border-radius:8px;background:rgba(5,8,15,.78);' +
+      'pointer-events:none;display:none';
+    document.body.appendChild(canvas);
+    ctx = canvas.getContext('2d');
+  }
+
+  function setVisible(v){
+    if (!canvas) init();
+    canvas.style.display = v ? 'block' : 'none';
+  }
+
+  function draw(){
+    if (!canvas || !ctx) return;
+    if (canvas.style.display === 'none') return;
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    // Map: world x in [-CHW, CHW] -> canvas X in [10, W-10]
+    //      world z in [-CHL, CHL] -> canvas Y in [10, H-10] (z=+CHL near top per Roblox convention; flip so far court at top)
+    function mapX(x){ return W*0.5 + (x / CHW) * (W*0.5 - 12); }
+    function mapY(z){ return H*0.5 - (z / CHL) * (H*0.5 - 12); }
+
+    // Court outline
+    ctx.strokeStyle = '#00b4ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(mapX(-CHW), mapY(CHL), mapX(CHW)-mapX(-CHW), mapY(-CHL)-mapY(CHL));
+    // Net (horizontal middle)
+    ctx.strokeStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(mapX(-CHW), mapY(0));
+    ctx.lineTo(mapX(CHW), mapY(0));
+    ctx.stroke();
+
+    // Players
+    for (let i=0; i<activePL.length; i++){
+      const pi = activePL[i];
+      const c = CHARS[pCharIdx[pi] % CHARS.length];
+      ctx.fillStyle = c.col;
+      ctx.beginPath();
+      ctx.arc(mapX(P[pi].x), mapY(P[pi].z), 5, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // Ball
+    if (B.active){
+      ctx.fillStyle = '#b2ff14';
+      ctx.shadowColor = '#b2ff14';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(mapX(B.pos.x), mapY(B.pos.z), 3, 0, Math.PI*2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // Score in corner
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = 'bold 11px Orbitron, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(SC.str(), 10, H - 8);
+  }
+
+  return { init: init, setVisible: setVisible, draw: draw };
+})();
+Radar.init();
+
+// ── End-of-match summary screen ────────────────────────
+const MatchSummary = (function(){
+  let panel = null;
+
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'match-summary';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
+      'z-index:130;background:rgba(5,8,15,.94);backdrop-filter:blur(6px);font-family:Orbitron,sans-serif;color:#fff';
+    panel.innerHTML =
+      '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(178,255,20,.4);border-radius:18px;' +
+      'padding:2rem 1.8rem;width:min(540px,92vw);display:flex;flex-direction:column;gap:1.1rem">' +
+        '<h2 id="ms-title" style="text-align:center;font-size:1.4rem;letter-spacing:.06em;color:#b2ff14">MATCH SUMMARY</h2>' +
+        '<div id="ms-winner" style="text-align:center;font-size:.85rem;letter-spacing:.1em;color:#aabbcc">Winner: P1</div>' +
+        '<div id="ms-stats" style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem 1.4rem;font-size:.74rem"></div>' +
+        '<div style="display:flex;gap:.6rem">' +
+          '<button id="ms-replay" class="abtn" style="flex:1">▶ REPLAY POINT</button>' +
+          '<button id="ms-lobby"  class="abtn" style="flex:1;background:#b2ff14;color:#000">🏠 LOBBY</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    panel.querySelector('#ms-replay').onclick = function(){
+      AudioSys.click();
+      hide();
+      ReplaySys.startPlayback();
+    };
+    panel.querySelector('#ms-lobby').onclick = function(){
+      AudioSys.click();
+      hide();
+      goLobby();
+    };
+  }
+
+  function show(){
+    if (!panel) build();
+    const winner = SC.winner;
+    panel.querySelector('#ms-title').textContent = winner === 0 ? '🏆 VICTORY!' : '💀 DEFEAT';
+    panel.querySelector('#ms-winner').textContent =
+      'P' + (winner+1) + ' wins ' + SC.sets[winner] + '–' + SC.sets[1-winner];
+    const grid = panel.querySelector('#ms-stats');
+    grid.innerHTML = '';
+    function row(label, v0, v1){
+      const div = document.createElement('div');
+      div.style.cssText = 'display:contents';
+      div.innerHTML = '<div style="color:#7a8ba0">' + label + '</div>' +
+        '<div style="text-align:right"><span style="color:#00c8ff">' + v0 + '</span> · <span style="color:#ff6050">' + v1 + '</span></div>';
+      grid.appendChild(div);
+    }
+    row('Aces',          STATS.aces[0],          STATS.aces[1]);
+    row('Winners',       STATS.winners[0],       STATS.winners[1]);
+    row('Errors',        STATS.errors[0],        STATS.errors[1]);
+    row('Smashes',       STATS.totalSmashes[0],  STATS.totalSmashes[1]);
+    row('Top Serve',     STATS.fastestServeKmh[0]+' km/h', STATS.fastestServeKmh[1]+' km/h');
+    row('Longest Rally', STATS.longestRally + ' shots', '—');
+    panel.style.display = 'flex';
+  }
+
+  function hide(){ if (panel) panel.style.display = 'none'; }
+
+  return { show: show, hide: hide };
+})();
+
+// ── Practice mode: target shooting + ball machine ─────
+const Practice = (function(){
+  let active = false;
+  const targets = [];        // moving glowing rings on the far court
+  const TARGET_COUNT = 3;
+  let machineTimer = 0;
+  let score = 0;
+  let timeLeft = 60;
+  let bestScore = 0;
+  try {
+    const stored = localStorage.getItem('spike_tennis_practice_best');
+    if (stored) bestScore = parseInt(stored, 10) || 0;
+  } catch(_){}
+
+  function spawnTargets(){
+    clearTargets();
+    for (let i=0; i<TARGET_COUNT; i++){
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.55, 0.85, 24),
+        new THREE.MeshBasicMaterial({ color: 0xffdd44, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
+      );
+      ring.position.set((Math.random()-0.5)*7, 0.05, -(3 + Math.random()*7));
+      ring.rotation.x = -Math.PI / 2;
+      scene.add(ring);
+      targets.push({ mesh: ring, age: 0, hit: false, vx: (Math.random()-0.5)*1.4 });
+    }
+  }
+  function clearTargets(){
+    for (let i=0; i<targets.length; i++) scene.remove(targets[i].mesh);
+    targets.length = 0;
+  }
+
+  function start(){
+    active = true;
+    score = 0; timeLeft = 60;
+    spawnTargets();
+    showMsg('PRACTICE — HIT THE RINGS!', 1500);
+    machineTimer = 1.4;
+    P[0].x = 0; P[0].z = 9;
+    chars[0].group.visible = true;
+    chars[1].group.visible = false;
+    chars[2].group.visible = false;
+    chars[3].group.visible = false;
+    showHUD(true);
+    document.getElementById('lobby').style.display = 'none';
+    gPhase = 'practice';
+    refreshHUD();
+  }
+  function stop(){
+    active = false;
+    clearTargets();
+    if (score > bestScore){
+      bestScore = score;
+      try { localStorage.setItem('spike_tennis_practice_best', String(score)); } catch(_){}
+    }
+    showMsg('TIME!  SCORE: ' + score + ' (BEST: ' + bestScore + ')', 4000);
+    AudioSys.fanfare();
+    setTimeout(function(){ goLobby(); }, 4200);
+  }
+
+  function refreshHUD(){
+    const pts = document.getElementById('pts');
+    const gms = document.getElementById('gms');
+    if (pts) pts.textContent = 'SCORE  ' + score;
+    if (gms) gms.textContent = Math.ceil(timeLeft) + 's left  ·  Best ' + bestScore;
+  }
+
+  function ballMachineFire(){
+    // Ball machine on the far baseline lobs balls toward P1
+    B.pos.set((Math.random()-0.5)*4, 1.4, -CHL + 0.5);
+    B.vel.set((P[0].x - B.pos.x) * 0.45 + (Math.random()-0.5)*1.5, 5.5, 9 + Math.random()*2);
+    B.bounces = 0; B.lastHitter = 1; B.active = true;
+    B.trail = [];
+    AudioSys.hit(0.5);
+    ParticleSys.sparkBurst(B.pos.x, B.pos.y, B.pos.z);
+  }
+
+  function update(dt){
+    if (!active) return;
+    timeLeft -= dt;
+    refreshHUD();
+    if (timeLeft <= 0){ stop(); return; }
+    machineTimer -= dt;
+    if (machineTimer <= 0 && (!B.active || B.pos.z < -8)){
+      ballMachineFire();
+      machineTimer = 2.4;
+    }
+    // Move targets
+    for (let i=0; i<targets.length; i++){
+      const t = targets[i];
+      t.age += dt;
+      t.mesh.position.x += t.vx * dt;
+      if (Math.abs(t.mesh.position.x) > 4){ t.vx *= -1; }
+      t.mesh.material.opacity = 0.65 + Math.sin(t.age*4)*0.20;
+      if (t.hit) continue;
+      // Hit detection
+      const dx = B.pos.x - t.mesh.position.x;
+      const dz = B.pos.z - t.mesh.position.z;
+      if (B.pos.y < 0.4 && dx*dx + dz*dz < 0.85*0.85){
+        t.hit = true;
+        score += 50;
+        showMsg('+50!', 700);
+        AudioSys.cheer(false);
+        AudioSys.score();
+        ParticleSys.smashBurst(t.mesh.position.x, t.mesh.position.z);
+        scene.remove(t.mesh);
+        // Spawn replacement after delay
+        setTimeout(function(){
+          if (!active) return;
+          const r = new THREE.Mesh(
+            new THREE.RingGeometry(0.55, 0.85, 24),
+            new THREE.MeshBasicMaterial({ color: 0xffdd44, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
+          );
+          r.position.set((Math.random()-0.5)*7, 0.05, -(3 + Math.random()*7));
+          r.rotation.x = -Math.PI/2;
+          scene.add(r);
+          targets[i] = { mesh: r, age: 0, hit: false, vx: (Math.random()-0.5)*1.4 };
+        }, 1200);
+      }
+    }
+  }
+
+  function isActive(){ return active; }
+  function getScore(){ return score; }
+  function getBest(){ return bestScore; }
+
+  return {
+    start: start, stop: stop, update: update,
+    isActive: isActive, getScore: getScore, getBest: getBest
+  };
+})();
+
+// ── Tournament mode (best-of-3 best-of-3, escalating difficulty) ──
+const Tournament = (function(){
+  let bracket = [];
+  let stage = 0;
+  let active = false;
+  function start(){
+    bracket = ['easy', 'easy', 'medium', 'medium', 'hard'];
+    stage = 0;
+    active = true;
+    advance();
+  }
+  function advance(){
+    if (!active) return;
+    if (stage >= bracket.length){
+      showMsg('🏆 TOURNAMENT WON! 🏆', 4500);
+      AudioSys.fanfare();
+      active = false;
+      try { localStorage.setItem('spike_tennis_tournament_won','1'); } catch(_){}
+      setTimeout(goLobby, 5000);
+      return;
+    }
+    const diff = bracket[stage++];
+    showMsg('ROUND ' + stage + '/' + bracket.length + ' — ' + diff.toUpperCase(), 1800);
+    setTimeout(function(){ startMode('ai_1v1', undefined, undefined, diff); }, 1900);
+  }
+  function onMatchOver(){
+    if (!active) return;
+    if (SC.winner === 0){
+      setTimeout(advance, 3000);
+    } else {
+      showMsg('TOURNAMENT OVER — Made it to Round '+stage+'/'+bracket.length, 3500);
+      active = false;
+      setTimeout(goLobby, 3700);
+    }
+  }
+  function isActive(){ return active; }
+  function reset(){ active = false; stage = 0; bracket = []; }
+  return { start: start, advance: advance, onMatchOver: onMatchOver, isActive: isActive, reset: reset };
+})();
+
 // ── Camera (Roblox 3rd-person: directly behind the character) ──
 const CAM = { yaw:0, pitch:0.22, dist:5.2, tx:0, ty:1.6, tz:9 };
 function updateCamera(){
@@ -1164,7 +1749,8 @@ function doJump(pi){
   if (humanPL.indexOf(pi) < 0) return;
   const p = P[pi];
   if ((p.jumpH||0) > 0.05 || (p.jumpVel||0) > 0.01) return;
-  p.jumpVel = 5.4;
+  p.jumpVel = (p._buffJump ? 8.6 : 5.4);
+  AudioSys.whoosh();
 }
 document.addEventListener('keydown', e=>{
   if (gPhase==='lobby') return;
@@ -1409,7 +1995,8 @@ function updateHumans(dt){
   // Camera-relative movement
   if (moving){
     const cf = camForwardRight();
-    const spd = (KEYS.ShiftLeft||KEYS.ShiftRight) ? p0.sprintSpd : p0.speed;
+    const speedMult = p0._buffSpeed ? 1.55 : 1.0;
+    const spd = ((KEYS.ShiftLeft||KEYS.ShiftRight) ? p0.sprintSpd : p0.speed) * speedMult;
     let mx=0, mz=0;
     if (KEYS.KeyW){ mx += cf.Fx; mz += cf.Fz; }
     if (KEYS.KeyS){ mx -= cf.Fx; mz -= cf.Fz; }
@@ -1427,6 +2014,7 @@ function updateHumans(dt){
   p0.z = Math.max(0.5, Math.min(CHL-0.5, p0.z));
   if (p0.hitCD>0) p0.hitCD -= dt*60;
   if (p0.swingT>0) p0.swingT -= dt*60;
+  Footsteps.update(dt, p0, moving);
 
   if (gMode==='local_1v1'){
     const p1 = P[1];
@@ -1495,6 +2083,7 @@ function onBounce(){
   const intensity = Math.min(1, speed / 14);
   AudioSys.bounce(intensity);
   ParticleSys.dustBurst(B.pos.x, B.pos.z);
+  FloorMarks.add(B.pos.x, B.pos.z);
   if (gPhase!=='rally') return;
   const onNear = B.pos.z>0;
   const inX = Math.abs(B.pos.x) <= CHW;
@@ -1533,6 +2122,8 @@ function endPoint(winner, reason){
     setTimeout(function(){
       gPhase='match_over';
       AudioSys.fanfare();
+      if (Tournament.isActive()) Tournament.onMatchOver();
+      else setTimeout(function(){ MatchSummary.show(); }, 2200);
     }, 2700);
   }
 }
@@ -1589,6 +2180,7 @@ function startMode(mode, conn, host, diff){
   const cp = document.getElementById('char-panel'); if (cp) cp.style.display='none';
   const sp = document.getElementById('settings-panel'); if (sp) sp.style.display='none';
   showHUD(true);
+  Radar.setVisible(true);
   gPhase='countdown'; cdVal=3; cdTimer=0;
   showMsg('3', 900);
 }
@@ -1597,10 +2189,16 @@ function goLobby(){
   B.active=false; TOSS.stop();
   showHUD(false); showServeUI(false); showTossUI(false);
   $bigmsg.style.display='none';
+  Radar.setVisible(false);
+  MatchSummary.hide();
   document.getElementById('diff-panel').style.display='none';
   document.getElementById('online-panel').style.display='none';
   const cp = document.getElementById('char-panel'); if (cp) cp.style.display='none';
   document.getElementById('lobby').style.display='flex';
+  FloorMarks.clearAll();
+  PowerUps.clearAll();
+  ReplaySys.clear();
+  Tournament.reset();
 }
 function onPeerData(d){
   if (d.type==='state'){
@@ -1624,7 +2222,7 @@ function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
   frameN++;
 
-  if (gPhase==='lobby'){ updateCamera(); ParticleSys.update(dt); updateCrowd(dt); renderer.render(scene, camera); return; }
+  if (gPhase==='lobby'){ updateCamera(); ParticleSys.update(dt); updateCrowd(dt); FloorMarks.update(dt); DayNight.update(dt); renderer.render(scene, camera); return; }
 
   if (gPhase==='countdown') updateCountdown(dt);
 
@@ -1663,6 +2261,15 @@ function animate(){
   syncCharVisuals();
   ParticleSys.update(dt);
   updateCrowd(dt);
+  FloorMarks.update(dt);
+  DayNight.update(dt);
+  PowerUps.update(dt);
+  ReplaySys.record();
+  ReplaySys.tick();
+  if (gPhase === 'practice'){ Practice.update(dt); B.update(dt); }
+  refreshReplayBtn();
+  Nametags.update();
+  Radar.draw();
 
   if (gPhase==='match_over'){
     showMsg('P'+(SC.winner+1)+' WINS THE MATCH!\n\nClick to return', 99999);
@@ -1743,6 +2350,26 @@ document.getElementById('d-med').onclick    = function(){ pickDiff('medium'); };
 document.getElementById('d-hard').onclick   = function(){ pickDiff('hard'); };
 document.getElementById('d-back').onclick   = function(){ closeDiff(); };
 document.getElementById('back-btn').onclick = function(){ goLobby(); };
+const _mPractice = document.getElementById('m-practice');
+if (_mPractice) _mPractice.onclick = function(){ AudioSys.click(); Practice.start(); };
+const _mTournament = document.getElementById('m-tournament');
+if (_mTournament) _mTournament.onclick = function(){ AudioSys.click(); Tournament.start(); };
+
+// Replay button (shown after a point ends, hidden during play)
+const _replayBtn = document.getElementById('replay-btn');
+if (_replayBtn){
+  _replayBtn.onclick = function(){
+    AudioSys.click();
+    if (ReplaySys.isPlaying()) return;
+    if (ReplaySys.bufferSize() < 5){ showMsg('Nothing to replay yet', 1000); return; }
+    showMsg('▶ REPLAY', 800);
+    ReplaySys.startPlayback();
+  };
+}
+function refreshReplayBtn(){
+  if (!_replayBtn) return;
+  _replayBtn.style.display = (gPhase === 'point_end' || gPhase === 'match_over') ? 'block' : 'none';
+}
 
 // ── Settings panel wireup ────────────────────────────
 function setToggle(id, on){
@@ -1830,6 +2457,7 @@ document.getElementById('t-tutorial').onclick = function(){
 // Apply settings at startup
 SETTINGS.apply();
 applyTheme(SETTINGS.theme);
+Nametags.setup();
 
 // Hide corner tools while on game-over screen so they don't overlap the message
 function setCornerToolsVisible(v){
