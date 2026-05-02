@@ -364,7 +364,15 @@ const B = {
     const dx = tx-this.pos.x, dz = tz-this.pos.z;
     const dist = Math.sqrt(dx*dx + dz*dz) || 1;
     const t = dist/speed;
-    this.vel.set(dx/t, this.GRAV*t*0.5 + (arcH-this.pos.y)/t, dz/t);
+    let vy = this.GRAV*t*0.5 + (arcH-this.pos.y)/t;
+    // HARD-CAP initial vy so peak height stays under the camera.
+    // peak = y0 + vy^2 / (2*g)  →  for peak ≤ MAX_PEAK,  vy ≤ sqrt(2*g*(MAX_PEAK-y0))
+    const MAX_PEAK = 3.0;
+    if (vy > 0){
+      const allowed = Math.sqrt(Math.max(0, 2 * this.GRAV * (MAX_PEAK - y0)));
+      if (vy > allowed) vy = allowed;
+    }
+    this.vel.set(dx/t, vy, dz/t);
   },
   update(dt){
     if (!this.active) return;
@@ -372,10 +380,10 @@ const B = {
     if (this.trail.length > TRAIL_LEN) this.trail.pop();
     this.vel.y -= this.GRAV*dt;
     this.pos.addScaledVector(this.vel, dt);
-    // Cap height so ball stays below the camera and remains visible — clamp at 4.0m
-    if (this.pos.y > 4.0){
-      this.pos.y = 4.0;
-      if (this.vel.y > 0) this.vel.y = -Math.abs(this.vel.y) * 0.4;
+    // Hard ceiling so the ball physically cannot leave the visible frame
+    if (this.pos.y > 3.2){
+      this.pos.y = 3.2;
+      if (this.vel.y > 0) this.vel.y = -Math.abs(this.vel.y) * 0.3;
     }
     if (this.pos.y <= 0.18){
       this.pos.y = 0.18;
@@ -1683,7 +1691,7 @@ const Tournament = (function(){
 // shoulder shifts both camera and look-at to the right of the character,
 // so the character sits in the LEFT portion of the screen and the court
 // is visible past their right shoulder.
-const CAM = { yaw:0, pitch:0.40, dist:7.5, tx:0, ty:1.6, tz:9, shoulder:2.4 };
+const CAM = { yaw:0, pitch:0.45, dist:8.0, tx:0, ty:1.6, tz:9, shoulder:2.4 };
 function updateCamera(){
   const p0 = P[0];
   CAM.tx += (p0.x                       - CAM.tx) * 0.18;
