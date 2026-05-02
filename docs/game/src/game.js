@@ -1318,9 +1318,12 @@ const Radar = (function(){
   function init(){
     canvas = document.createElement('canvas');
     canvas.width = 140; canvas.height = 280;
-    canvas.style.cssText = 'position:fixed;bottom:80px;right:14px;z-index:50;' +
+    // IMPORTANT: top:auto + left:auto override the global `canvas{inset:0}` rule
+    // that would otherwise stretch this mini-map to fill the whole viewport.
+    canvas.style.cssText = 'position:fixed;top:auto;left:auto;bottom:80px;right:14px;' +
+      'width:140px !important;height:280px !important;z-index:50;' +
       'border:1px solid rgba(0,180,255,.35);border-radius:8px;background:rgba(5,8,15,.78);' +
-      'pointer-events:none;display:none';
+      'pointer-events:none;display:none;inset:auto';
     document.body.appendChild(canvas);
     ctx = canvas.getContext('2d');
   }
