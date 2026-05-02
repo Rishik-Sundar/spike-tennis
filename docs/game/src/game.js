@@ -1394,10 +1394,11 @@ const MatchSummary = (function(){
     panel = document.createElement('div');
     panel.id = 'match-summary';
     panel.style.cssText =
-      'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
-      'z-index:130;background:rgba(5,8,15,.94);backdrop-filter:blur(6px);font-family:Orbitron,sans-serif;color:#fff';
+      'position:fixed;inset:0;display:none;' +
+      'z-index:130;background:rgba(5,8,15,.94);backdrop-filter:blur(6px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch;font-family:Orbitron,sans-serif;color:#fff';
     panel.innerHTML =
-      '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(178,255,20,.4);border-radius:18px;' +
+      '<div style="margin:auto;background:rgba(12,18,32,.97);border:1.5px solid rgba(178,255,20,.4);border-radius:18px;' +
       'padding:2rem 1.8rem;width:min(540px,92vw);display:flex;flex-direction:column;gap:1.1rem">' +
         '<h2 id="ms-title" style="text-align:center;font-size:1.4rem;letter-spacing:.06em;color:#b2ff14">MATCH SUMMARY</h2>' +
         '<div id="ms-winner" style="text-align:center;font-size:.85rem;letter-spacing:.1em;color:#aabbcc">Winner: P1</div>' +
@@ -1442,6 +1443,8 @@ const MatchSummary = (function(){
     row('Top Serve',     STATS.fastestServeKmh[0]+' km/h', STATS.fastestServeKmh[1]+' km/h');
     row('Longest Rally', STATS.longestRally + ' shots', '—');
     panel.style.display = 'flex';
+    panel.style.alignItems = 'center';
+    panel.style.justifyContent = 'center';
   }
 
   function hide(){ if (panel) panel.style.display = 'none'; }
@@ -1622,7 +1625,7 @@ const Tournament = (function(){
 })();
 
 // ── Camera (Roblox 3rd-person: directly behind the character) ──
-const CAM = { yaw:0, pitch:0.22, dist:5.2, tx:0, ty:1.6, tz:9 };
+const CAM = { yaw:0, pitch:0.40, dist:7.5, tx:0, ty:1.6, tz:9 };
 function updateCamera(){
   const p0 = P[0];
   // Target = the character itself (chest height)
@@ -1863,19 +1866,22 @@ function doServeHit(pi){
 }
 
 function doHit(who){
-  if (gPhase!=='rally') return;
+  if (gPhase!=='rally' && gPhase!=='practice') return;
   const pi = who===0?0:1;
-  if (humanPL.indexOf(pi)<0) return;
+  if (gPhase==='rally' && humanPL.indexOf(pi)<0) return;
   const p = P[pi];
   // Block spam: must be off cooldown AND not mid-swing
   if (p.hitCD>0 || p.swingT>0) return;
-  const onMySide = p.side==='near' ? B.pos.z>0 : B.pos.z<0;
-  if (!onMySide) return;
-  // Must be near the ball — REAL distance, not just a cap
+  // In rally, must be on your side. In practice, no side requirement.
+  if (gPhase==='rally'){
+    const onMySide = p.side==='near' ? B.pos.z>0 : B.pos.z<0;
+    if (!onMySide) return;
+  }
+  // Must be near the ball — looser range so connecting is easier
   const dx=p.x-B.pos.x, dz=p.z-B.pos.z;
   const dist = Math.sqrt(dx*dx+dz*dz);
-  if (dist > 4.0) return;          // tighter range so you actually have to move
-  if (B.pos.y > 3.5) return;       // ball too high to reach
+  if (dist > 5.5) return;          // was 4.0 — that was punishingly tight
+  if (B.pos.y > 4.0) return;       // was 3.5 — small bump for jump-smashes
   const q = ringActive?ringQuality():0.38;
   ringActive=false;
   p.swingT=22; p.hitCD=42;          // longer cooldown — no F spamming
@@ -2227,6 +2233,9 @@ function animate(){
 
   if (gPhase==='lobby'){ updateCamera(); ParticleSys.update(dt); updateCrowd(dt); FloorMarks.update(dt); DayNight.update(dt); renderer.render(scene, camera); return; }
 
+  // Movement should ALWAYS work during gameplay (was rally-only — bug)
+  if (gPhase!=='match_over') updateHumans(dt);
+
   if (gPhase==='countdown') updateCountdown(dt);
 
   if (gPhase==='serve_meter'){
@@ -2245,7 +2254,6 @@ function animate(){
   }
 
   if (gPhase==='rally'){
-    updateHumans(dt);
     updateAI(dt);
     B.update(dt);
     updateRing3d();
