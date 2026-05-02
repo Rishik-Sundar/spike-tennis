@@ -1624,30 +1624,35 @@ const Tournament = (function(){
   return { start: start, advance: advance, onMatchOver: onMatchOver, isActive: isActive, reset: reset };
 })();
 
-// ── Camera (Roblox 3rd-person: directly behind the character) ──
-const CAM = { yaw:0, pitch:0.40, dist:7.5, tx:0, ty:1.6, tz:9 };
+// ── Camera (over-the-shoulder, Roblox 3rd-person) ──────
+// shoulder shifts both camera and look-at to the right of the character,
+// so the character sits in the LEFT portion of the screen and the court
+// is visible past their right shoulder.
+const CAM = { yaw:0, pitch:0.40, dist:7.5, tx:0, ty:1.6, tz:9, shoulder:2.4 };
 function updateCamera(){
   const p0 = P[0];
-  // Target = the character itself (chest height)
   CAM.tx += (p0.x                       - CAM.tx) * 0.18;
-  CAM.ty += (1.5 + (p0.jumpH||0)*0.5    - CAM.ty) * 0.12;
+  CAM.ty += (1.6 + (p0.jumpH||0)*0.5    - CAM.ty) * 0.12;
   CAM.tz += (p0.z                       - CAM.tz) * 0.18;
   const sy = Math.sin(CAM.yaw),  cy = Math.cos(CAM.yaw);
   const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
-  // yaw=0, P1 at +z → camera sits at target.z + dist (further +z = directly behind P1)
+  // Camera-local right vector in horizontal plane = (cy, 0, -sy)
+  const sX = CAM.shoulder * cy;
+  const sZ = CAM.shoulder * (-sy);
   camera.position.set(
-    CAM.tx + CAM.dist*cp*sy,
+    CAM.tx + CAM.dist*cp*sy + sX,
     CAM.ty + CAM.dist*sp,
-    CAM.tz + CAM.dist*cp*cy
+    CAM.tz + CAM.dist*cp*cy + sZ
   );
-  camera.lookAt(CAM.tx, CAM.ty, CAM.tz);
+  camera.lookAt(CAM.tx + sX, CAM.ty, CAM.tz + sZ);
 }
 function initCamera(){
-  CAM.tx = 0; CAM.ty = 1.5; CAM.tz = 9;
+  CAM.tx = 0; CAM.ty = 1.6; CAM.tz = 9;
   const sy = Math.sin(CAM.yaw), cy = Math.cos(CAM.yaw);
   const sp = Math.sin(CAM.pitch), cp = Math.cos(CAM.pitch);
-  camera.position.set(CAM.tx + CAM.dist*cp*sy, CAM.ty + CAM.dist*sp, CAM.tz + CAM.dist*cp*cy);
-  camera.lookAt(CAM.tx, CAM.ty, CAM.tz);
+  const sX = CAM.shoulder * cy, sZ = CAM.shoulder * (-sy);
+  camera.position.set(CAM.tx + CAM.dist*cp*sy + sX, CAM.ty + CAM.dist*sp, CAM.tz + CAM.dist*cp*cy + sZ);
+  camera.lookAt(CAM.tx + sX, CAM.ty, CAM.tz + sZ);
 }
 initCamera();
 
