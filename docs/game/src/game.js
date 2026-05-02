@@ -303,10 +303,10 @@ let pCharIdx = [1, 0, 2, 5]; // default characters per player slot
 
 // ── Players ───────────────────────────────────────────
 const P = [
-  { x: 0,  z: 9,  side:'near', speed:5, sprintSpd:7, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
-  { x: 0,  z:-9,  side:'far',  speed:5, sprintSpd:7, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
-  { x: 2,  z: 9,  side:'near', speed:5, sprintSpd:7, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
-  { x:-2,  z:-9,  side:'far',  speed:5, sprintSpd:7, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
+  { x: 0,  z: 9,  side:'near', speed:7, sprintSpd:10, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
+  { x: 0,  z:-9,  side:'far',  speed:7, sprintSpd:10, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
+  { x: 2,  z: 9,  side:'near', speed:7, sprintSpd:10, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
+  { x:-2,  z:-9,  side:'far',  speed:7, sprintSpd:10, swingT:0, hitCD:0, jumpH:0, jumpVel:0, walkT:0, serving:false },
 ];
 
 // Build character meshes
@@ -372,6 +372,11 @@ const B = {
     if (this.trail.length > TRAIL_LEN) this.trail.pop();
     this.vel.y -= this.GRAV*dt;
     this.pos.addScaledVector(this.vel, dt);
+    // Cap height so ball stays below the camera and remains visible — clamp at 4.0m
+    if (this.pos.y > 4.0){
+      this.pos.y = 4.0;
+      if (this.vel.y > 0) this.vel.y = -Math.abs(this.vel.y) * 0.4;
+    }
     if (this.pos.y <= 0.18){
       this.pos.y = 0.18;
       if (Math.abs(this.vel.y) > 0.4){
@@ -408,6 +413,38 @@ const TOSS = {
   },
   stop(){ this.active=false; tossMesh.visible=false; }
 };
+
+// ── Ball landing predictor (ground marker so you can see where ball lands) ──
+const landingMarker = (function(){
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.32, 0.50, 28),
+    new THREE.MeshBasicMaterial({ color: 0xffdd33, side: THREE.DoubleSide, transparent: true, opacity: 0.78 })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.06;
+  ring.visible = false;
+  scene.add(ring);
+  return ring;
+})();
+function updateLandingMarker(){
+  if (!B.active){ landingMarker.visible = false; return; }
+  const y0 = B.pos.y, vy = B.vel.y, g = B.GRAV;
+  const disc = vy*vy + 2*g*(y0 - 0.18);
+  if (disc < 0){ landingMarker.visible = false; return; }
+  const t = (vy + Math.sqrt(disc)) / g;
+  if (t <= 0 || t > 4){ landingMarker.visible = false; return; }
+  const lx = B.pos.x + B.vel.x * t;
+  const lz = B.pos.z + B.vel.z * t;
+  if (Math.abs(lx) > CHW + 6 || Math.abs(lz) > CHL + 6){
+    landingMarker.visible = false; return;
+  }
+  const inCourt = (Math.abs(lx) <= CHW) && (Math.abs(lz) <= CHL);
+  landingMarker.material.color.setHex(inCourt ? 0x60ff80 : 0xff5050);
+  landingMarker.position.set(lx, 0.06, lz);
+  landingMarker.visible = true;
+  const pulse = 1.0 + Math.max(0, 1 - t/1.5) * 0.5;
+  landingMarker.scale.setScalar(pulse);
+}
 
 // ── Hit ring ─────────────────────────────────────────
 const ringGeo = new THREE.RingGeometry(0.45, 0.55, 32);
@@ -1676,13 +1713,10 @@ initCamera();
 
 // Camera-relative forward/right (for WASD movement)
 function camForwardRight(){
-  const fx = CAM.tx - camera.position.x;
-  const fz = CAM.tz - camera.position.z;
-  const fl = Math.hypot(fx, fz) || 1;
-  const Fx = fx/fl, Fz = fz/fl;
-  // Right = F × up = (Fz, 0, -Fx)
-  // Right = F × up = (-Fz, 0, Fx) — was reversed before
-  return { Fx:Fx, Fz:Fz, Rx:-Fz, Rz:Fx };
+  // Compute directly from yaw, ignoring shoulder offset and camera height.
+  // Forward (horizontal): (-sin yaw, 0, -cos yaw); Right: (cos yaw, 0, -sin yaw)
+  const sy = Math.sin(CAM.yaw), cy = Math.cos(CAM.yaw);
+  return { Fx:-sy, Fz:-cy, Rx:cy, Rz:-sy };
 }
 
 // ── UI helpers ───────────────────────────────────────
@@ -1712,9 +1746,9 @@ function showMsg(txt, ms){
 function showServeUI(on){ document.getElementById('serve-ui').style.display = on?'flex':'none'; }
 function updateServeMeter(v){
   document.getElementById('meter-needle').style.left = (v*100)+'%';
-  // Best zone is the LEFT (low %) — click early to nail a perfect serve
-  const zone = v < 0.18 ? 'PERFECT!' : v < 0.45 ? 'GOOD' : 'WEAK';
-  const col  = v < 0.18 ? '#60ff80' : v < 0.45 ? '#ffdc32' : '#ff5050';
+  // Best zone is the RIGHT (high %) — click late to nail max power
+  const zone = v > 0.82 ? 'PERFECT!' : v > 0.55 ? 'GOOD' : 'WEAK';
+  const col  = v > 0.82 ? '#60ff80' : v > 0.55 ? '#ffdc32' : '#ff5050';
   const pct  = Math.floor(v*100);
   const pctEl = document.getElementById('meter-pct');
   const zlbl  = document.getElementById('meter-zonelbl');
@@ -1864,9 +1898,9 @@ function doServeHit(pi){
   if (tossHit) return;
   const tn = TOSS.t/TOSS.dur, dev = Math.abs(tn-0.5);
   const timing = Math.max(0, 1 - dev*3.0);
-  // Power quality: LEFT side of meter = best
-  // <0.18 = perfect (1.0), <0.45 = good (0.65), else weak (0.30)
-  const powerQ = srvPower < 0.18 ? 1.0 : srvPower < 0.45 ? 0.65 : 0.30;
+  // Power quality: RIGHT side of meter = best
+  // >0.82 = perfect (1.0), >0.55 = good (0.65), else weak (0.30)
+  const powerQ = srvPower > 0.82 ? 1.0 : srvPower > 0.55 ? 0.65 : 0.30;
   const quality = powerQ*0.55 + timing*0.45;
   tossHit=true; TOSS.stop();
   P[pi].swingT=24;
@@ -1878,8 +1912,8 @@ function doServeHit(pi){
   const tz = P[pi].side==='near' ? -SVC_Z*0.65 : SVC_Z*0.65;
   // Launch from elevated position (jump serve) — racket meets ball above the head
   const fromY = 2.2 + (P[pi].jumpH||0) * 1.4;
-  const srvSpeed = 6 + quality*8;
-  B.launch(pi, tx, tz, srvSpeed, 0.4, fromY);
+  const srvSpeed = 14 + quality*8;
+  B.launch(pi, tx, tz, srvSpeed, 0.3, fromY);
   AudioSys.hit(0.9 + quality*0.4);
   ParticleSys.sparkBurst(P[pi].x, fromY, P[pi].z + (P[pi].side==='near'?-0.3:0.3));
   STATS.registerHit(pi, false, true);
@@ -1913,31 +1947,39 @@ function doHit(who){
   const tz = p.side==='near' ? -(3+Math.random()*5) : (3+Math.random()*5);
   // Auto-smash when jumping AND ball is high
   const isSmash = (p.jumpH > 0.25) && (B.pos.y > 1.6);
-  let arcH=1.6, spd=5.5, fromY=null;
   if (isSmash){
-    // REAL SMASH: launch from up high, slam ball down deep into opponent's court
-    arcH = -1.8;                                  // strongly downward arc
-    spd  = 17;                                    // very fast
-    fromY = 1.9 + (p.jumpH || 0) * 1.6;            // start ABOVE the player (jump + reach)
-    // Override target to be deep in opponent's court (slam it past the service line)
+    // REAL SMASH: solve direct ballistic so ball ACTUALLY goes DOWN
+    const fromY = 2.0 + (p.jumpH || 0) * 1.5;
     const aimX = Math.max(-CHW+0.6, Math.min(CHW-0.6, txR*4.2));
     const aimZ = p.side==='near' ? -(7 + Math.random()*3) : (7 + Math.random()*3);
-    p.swingT = 28;                                // longer swing animation
+    const dx = aimX - p.x, dz = aimZ - p.z;
+    const tFlight = 0.55;                          // very fast smash, fixed time
+    // From y(t) = fromY + vy*t - 0.5*g*t^2 = 0.18, solve for vy
+    const g = B.GRAV;
+    const vyNeeded = (0.18 - fromY + 0.5 * g * tFlight * tFlight) / tFlight;
+    B.pos.set(p.x, fromY, p.z + (pi<2?-0.4:0.4));
+    B.bounces = 0; B.lastHitter = pi; B.active = true; B.trail = [];
+    B.vel.set(dx/tFlight, vyNeeded, dz/tFlight);
+    ballMesh.position.copy(B.pos);
+    ballLight.position.copy(B.pos);
+    ballMesh.visible = true;
+    p.swingT = 28;
     showMsg('🔥 SMASH!', 800);
     AudioSys.smash();
     AudioSys.whoosh();
     ParticleSys.sparkBurst(p.x, fromY, p.z);
-    B.launch(pi, aimX, aimZ, spd, arcH, fromY);
     STATS.registerHit(pi, true, false);
     triggerCrowdWave();
-    if (peerConn && isHost){ try{ peerConn.send({type:'hit', pi:pi, tx:aimX, tz:aimZ, spd:spd, arcH:arcH, y0:fromY}); }catch(_){} }
+    if (peerConn && isHost){ try{ peerConn.send({type:'hit', pi:pi, tx:aimX, tz:aimZ, spd:dx/tFlight, arcH:-9, y0:fromY}); }catch(_){} }
     return;
   }
-  if (KEYS.KeyQ){ arcH=2.2; spd=4.5; }
-  else if (KEYS.KeyE){ arcH=1.0; spd=4.5; }
-  else if (KEYS.KeyR){ arcH=5.0; spd=3.5; }
-  else if (KEYS.KeyG){ arcH=0.7; spd=8.0; }
-  spd *= 0.7 + q*0.58;
+  // Regular shots — speeds boosted so flight time is short enough for visible arcs
+  let arcH=0.6, spd=11;
+  if (KEYS.KeyQ)      { arcH=1.4; spd=10; }    // topspin: more arc, slower
+  else if (KEYS.KeyE) { arcH=0.4; spd=10; }    // slice:   flat, slower
+  else if (KEYS.KeyR) { arcH=2.6; spd=8;  }    // lob:     high but capped at 4m by physics
+  else if (KEYS.KeyG) { arcH=0.3; spd=15; }    // flat hard
+  spd *= 0.75 + q*0.50;
   B.launch(pi, tx, tz, spd, arcH);
   AudioSys.hit(0.5 + q * 0.6);
   ParticleSys.sparkBurst(p.x, B.pos.y, p.z);
@@ -1953,10 +1995,10 @@ function updateAI(dt){
     if (gPhase==='serve_meter' && pi===srv){
       aiCDs[pi] -= dt*60;
       if (aiCDs[pi]<=0){
-        // AI clicks the meter at low values (left side = perfect now)
-        srvPower = D.power<1 ? 0.30 + Math.random()*0.18    // easy: often misses zone
-                  : D.power>1.1 ? 0.05 + Math.random()*0.10  // hard: nails perfect
-                  : 0.10 + Math.random()*0.18;               // medium: usually good/perfect
+        // AI clicks the meter at high values (right side = perfect)
+        srvPower = D.power<1 ? 0.55 + Math.random()*0.18    // easy: often misses
+                  : D.power>1.1 ? 0.85 + Math.random()*0.13  // hard: nails perfect
+                  : 0.72 + Math.random()*0.18;               // medium: usually good/perfect
         TOSS.start(p.x, p.z + (p.side==='near'?-0.3:0.3));
         gPhase='serve_toss'; tossHit=false; showServeUI(false);
         aiCDs[pi] = D.srvBaseCD;
@@ -1968,8 +2010,8 @@ function updateAI(dt){
         tossHit=true; TOSS.stop(); P[pi].swingT=18; P[pi].jumpVel=4;
         const tx = (Math.random()-0.5)*5;
         const tz = p.side==='near' ? -SVC_Z*0.7 : SVC_Z*0.7;
-        const srvSpd = (4 + Math.random()*2) * D.power;
-        B.launch(pi, tx, tz, srvSpd, 1.4);
+        const srvSpd = (12 + Math.random()*4) * D.power;
+        B.launch(pi, tx, tz, srvSpd, 0.6);
         AudioSys.hit(0.85);
         ParticleSys.sparkBurst(p.x, 1.5, p.z);
         STATS.registerHit(pi, false, true);
@@ -1995,8 +2037,8 @@ function updateAI(dt){
         p.swingT=16; p.hitCD=28;
         const tx = (Math.random()-0.5)*(3+D.aimNoise*2);
         const tz = p.side==='near' ? -(3+Math.random()*5) : (3+Math.random()*5);
-        const spd = (4.5+Math.random()*2)*D.power;
-        const arcH = 1.4+Math.random()*0.8;
+        const spd = (10 + Math.random()*3) * D.power;
+        const arcH = 0.6 + Math.random()*0.5;
         B.launch(pi, tx, tz, spd, arcH);
         AudioSys.hit(0.6);
         ParticleSys.sparkBurst(p.x, B.pos.y, p.z);
@@ -2304,6 +2346,7 @@ function animate(){
   refreshReplayBtn();
   Nametags.update();
   Radar.draw();
+  updateLandingMarker();
 
   if (gPhase==='match_over'){
     showMsg('P'+(SC.winner+1)+' WINS THE MATCH!\n\nClick to return', 99999);
