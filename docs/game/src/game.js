@@ -1489,7 +1489,6 @@ const Practice = (function(){
     score = 0; timeLeft = 60;
     spawnTargets();
     showMsg('PRACTICE — HIT THE RINGS!', 1500);
-    machineTimer = 1.4;
     P[0].x = 0; P[0].z = 9;
     chars[0].group.visible = true;
     chars[1].group.visible = false;
@@ -1497,8 +1496,15 @@ const Practice = (function(){
     chars[3].group.visible = false;
     showHUD(true);
     document.getElementById('lobby').style.display = 'none';
+    Radar.setVisible(true);
     gPhase = 'practice';
     refreshHUD();
+    // Reset the ball state and immediately fire one so there IS a ball
+    B.reset(0);
+    ballMesh.visible = true;
+    machineTimer = 0.5;
+    AudioSys.init(); AudioSys.ensureRunning();
+    AudioSys.setCrowdVolume(SETTINGS.muted ? 0 : SETTINGS.crowdLevel);
   }
   function stop(){
     active = false;
@@ -1525,8 +1531,14 @@ const Practice = (function(){
     B.vel.set((P[0].x - B.pos.x) * 0.45 + (Math.random()-0.5)*1.5, 5.5, 9 + Math.random()*2);
     B.bounces = 0; B.lastHitter = 1; B.active = true;
     B.trail = [];
+    // Push the mesh to its new position immediately so the ball is visible
+    // even before the next physics tick.
+    ballMesh.position.copy(B.pos);
+    ballMesh.visible = true;
+    ballLight.position.copy(B.pos);
     AudioSys.hit(0.5);
     ParticleSys.sparkBurst(B.pos.x, B.pos.y, B.pos.z);
+    showMsg('🎾 INCOMING!', 600);
   }
 
   function update(dt){
@@ -1535,9 +1547,15 @@ const Practice = (function(){
     refreshHUD();
     if (timeLeft <= 0){ stop(); return; }
     machineTimer -= dt;
-    if (machineTimer <= 0 && (!B.active || B.pos.z < -8)){
+    // Always fire on a fixed schedule — the previous gating made later balls
+    // never spawn because the ball stays "active" after first launch.
+    if (machineTimer <= 0){
       ballMachineFire();
-      machineTimer = 2.4;
+      machineTimer = 3.0;
+    }
+    // Also re-fire if ball has clearly gone past the player and stopped
+    if (B.active && B.pos.z > CHL + 1){
+      B.active = false;
     }
     // Move targets
     for (let i=0; i<targets.length; i++){
