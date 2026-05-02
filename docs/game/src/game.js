@@ -57,6 +57,10 @@ scene.add(ballLight);
 const CW=10, CL=22, CHW=5, CHL=11;
 const NET_H=0.92, SVC_Z=5.5;
 
+// Module-scoped refs for theme switching (set in buildCourt)
+let _surfaceMesh = null, _surroundMesh = null;
+const _neonMeshes = [];
+
 // ── Court builder ────────────────────────────────────
 function buildCourt(){
   // Surround (green grass)
@@ -68,6 +72,7 @@ function buildCourt(){
   surround.position.y = -0.02;
   surround.receiveShadow = true;
   scene.add(surround);
+  _surroundMesh = surround;
 
   // Court surface (blue hard court)
   const surf = new THREE.Mesh(
@@ -77,6 +82,7 @@ function buildCourt(){
   surf.rotation.x = -Math.PI/2;
   surf.receiveShadow = true;
   scene.add(surf);
+  _surfaceMesh = surf;
 
   // Service boxes (subtle darker overlay)
   const svcMat = new THREE.MeshStandardMaterial({ color: 0x094ea0, roughness:0.7, transparent:true, opacity:0.5 });
@@ -111,10 +117,13 @@ function buildCourt(){
   const neonMat = new THREE.MeshStandardMaterial({ color:0x00b4ff, emissive:0x00b4ff, emissiveIntensity:2.4 });
   function neon(x1,z1,x2,z2){
     const len = Math.hypot(x2-x1, z2-z1);
-    const m = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.07, len), neonMat);
+    // Each neon strip needs its OWN material instance for theme switching
+    const indMat = new THREE.MeshStandardMaterial({ color:0x00b4ff, emissive:0x00b4ff, emissiveIntensity:2.4 });
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.07, len), indMat);
     m.position.set((x1+x2)/2, 0.035, (z1+z2)/2);
     m.rotation.y = Math.atan2(x2-x1, z2-z1);
     scene.add(m);
+    _neonMeshes.push(m);
   }
   neon(-CHW, CHL, CHW, CHL); neon(-CHW,-CHL, CHW,-CHL);
   neon(-CHW, CHL,-CHW,-CHL); neon( CHW, CHL, CHW,-CHL);
@@ -277,12 +286,18 @@ let peerConn=null, isHost=false;
 
 // ── Character presets ─────────────────────────────────
 const CHARS = [
-  { name:'BLAZE', col:'#ff5050', hair:'spike', hairCol:'#220a05', skin:'#d4956a' },
-  { name:'AZURE', col:'#00b4ff', hair:'short', hairCol:'#1a1428', skin:'#f0c090' },
-  { name:'NEON',  col:'#b2ff14', hair:'cap',   hairCol:'#003040', skin:'#a07050' },
-  { name:'STORM', col:'#a050ff', hair:'long',  hairCol:'#1a0828', skin:'#d4956a' },
-  { name:'FROST', col:'#80fff0', hair:'short', hairCol:'#102030', skin:'#f8d8b0' },
-  { name:'EMBER', col:'#ff9632', hair:'spike', hairCol:'#3a1a05', skin:'#b08060' },
+  { name:'BLAZE',   col:'#ff5050', hair:'spike',  hairCol:'#220a05', skin:'#d4956a', tag:'AGGRESSIVE' },
+  { name:'AZURE',   col:'#00b4ff', hair:'short',  hairCol:'#1a1428', skin:'#f0c090', tag:'BALANCED'   },
+  { name:'NEON',    col:'#b2ff14', hair:'cap',    hairCol:'#003040', skin:'#a07050', tag:'POWERFUL'   },
+  { name:'STORM',   col:'#a050ff', hair:'long',   hairCol:'#1a0828', skin:'#d4956a', tag:'TRICKY'     },
+  { name:'FROST',   col:'#80fff0', hair:'short',  hairCol:'#102030', skin:'#f8d8b0', tag:'PRECISE'    },
+  { name:'EMBER',   col:'#ff9632', hair:'spike',  hairCol:'#3a1a05', skin:'#b08060', tag:'EXPLOSIVE'  },
+  { name:'VOLT',    col:'#ffe800', hair:'spike',  hairCol:'#0a0a14', skin:'#d4956a', tag:'SPEEDY'     },
+  { name:'JADE',    col:'#22dd66', hair:'long',   hairCol:'#1a1010', skin:'#a07050', tag:'STAMINA'    },
+  { name:'ROGUE',   col:'#ff2080', hair:'cap',    hairCol:'#0a0814', skin:'#f0c090', tag:'CHAOTIC'    },
+  { name:'OBSIDIAN',col:'#5a30c0', hair:'short',  hairCol:'#000000', skin:'#a07050', tag:'CONTROLLED' },
+  { name:'CORAL',   col:'#ff8090', hair:'long',   hairCol:'#3a1a14', skin:'#f8d8b0', tag:'AGILE'      },
+  { name:'TITAN',   col:'#666688', hair:'cap',    hairCol:'#101018', skin:'#b08060', tag:'DEFENSIVE'  },
 ];
 let pCharIdx = [1, 0, 2, 5]; // default characters per player slot
 
@@ -412,6 +427,611 @@ function updateRing3d(){
   ringMat.color.setHex(q>0.85?0x60ff80:q>0.5?0xffdd33:0xff5050);
   ring3d.scale.setScalar(ringR/0.7 * 1.4);
 }
+
+// ── Audio system (Web Audio API — fully synthesized, no asset loading) ──
+const AudioSys = (function(){
+  let ac = null;
+  let masterGain = null;
+  let crowdGain = null;
+  let muted = false;
+  let initialized = false;
+  let crowdNoiseSrc = null;
+
+  function init(){
+    if (initialized) return;
+    initialized = true;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      ac = new Ctx();
+      masterGain = ac.createGain();
+      masterGain.gain.value = 0.6;
+      masterGain.connect(ac.destination);
+      crowdGain = ac.createGain();
+      crowdGain.gain.value = 0.0;
+      crowdGain.connect(masterGain);
+      startCrowdNoise();
+    } catch(e){
+      ac = null;
+    }
+  }
+
+  function ensureRunning(){
+    if (!ac) init();
+    if (ac && ac.state === 'suspended'){
+      try { ac.resume(); } catch(_){}
+    }
+  }
+
+  // White noise filtered to sound like crowd murmur
+  function startCrowdNoise(){
+    if (!ac) return;
+    const bufSize = 2 * ac.sampleRate;
+    const buf = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i=0; i<bufSize; i++) data[i] = (Math.random()*2 - 1) * 0.5;
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const filter = ac.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 600;
+    src.connect(filter);
+    filter.connect(crowdGain);
+    src.start();
+    crowdNoiseSrc = src;
+  }
+
+  function setCrowdVolume(v){
+    if (!crowdGain) return;
+    crowdGain.gain.cancelScheduledValues(ac.currentTime);
+    crowdGain.gain.linearRampToValueAtTime(v, ac.currentTime + 0.4);
+  }
+
+  function setMuted(m){
+    muted = !!m;
+    if (masterGain) masterGain.gain.value = muted ? 0 : 0.6;
+  }
+
+  // Generic synthesized "hit" pop with band-passed noise burst
+  function hitSound(power){
+    if (!ac || muted) return;
+    ensureRunning();
+    power = power || 0.7;
+    const t = ac.currentTime;
+    // Noise burst
+    const bufSize = Math.floor(ac.sampleRate * 0.10);
+    const buf = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i=0; i<bufSize; i++){
+      data[i] = (Math.random()*2 - 1) * Math.pow(1 - i/bufSize, 2);
+    }
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const flt = ac.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.value = 800 + power*1400;
+    flt.Q.value = 5;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0.0, t);
+    gain.gain.linearRampToValueAtTime(0.5 * power, t + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+    src.connect(flt); flt.connect(gain); gain.connect(masterGain);
+    src.start(t); src.stop(t + 0.12);
+
+    // Pitched body — short FM-ish tone
+    const osc = ac.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(280 + power*180, t);
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.07);
+    const og = ac.createGain();
+    og.gain.setValueAtTime(0.0, t);
+    og.gain.linearRampToValueAtTime(0.20 * power, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+    osc.connect(og); og.connect(masterGain);
+    osc.start(t); osc.stop(t + 0.11);
+  }
+
+  // Dull thud for ball hitting court
+  function bounceSound(intensity){
+    if (!ac || muted) return;
+    ensureRunning();
+    intensity = Math.max(0.2, Math.min(1, intensity || 0.6));
+    const t = ac.currentTime;
+    const osc = ac.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(160, t);
+    osc.frequency.exponentialRampToValueAtTime(50, t + 0.10);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0, t);
+    g.gain.linearRampToValueAtTime(0.18 * intensity, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t + 0.13);
+  }
+
+  // Big SMASH sound — louder noise burst + low end
+  function smashSound(){
+    if (!ac || muted) return;
+    ensureRunning();
+    hitSound(1.4);
+    const t = ac.currentTime;
+    const osc = ac.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(80, t);
+    osc.frequency.exponentialRampToValueAtTime(35, t + 0.18);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0, t);
+    g.gain.linearRampToValueAtTime(0.30, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.20);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t + 0.22);
+  }
+
+  // Net touch
+  function netSound(){
+    if (!ac || muted) return;
+    ensureRunning();
+    const t = ac.currentTime;
+    const osc = ac.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(420, t);
+    osc.frequency.exponentialRampToValueAtTime(180, t + 0.10);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0, t);
+    g.gain.linearRampToValueAtTime(0.15, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t + 0.13);
+  }
+
+  // Crowd cheer / applause (filtered noise envelope)
+  function cheerSound(big){
+    if (!ac || muted) return;
+    ensureRunning();
+    const t = ac.currentTime;
+    const dur = big ? 1.6 : 0.9;
+    const bufSize = Math.floor(ac.sampleRate * dur);
+    const buf = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i=0; i<bufSize; i++){
+      const env = i < bufSize*0.15 ? (i/(bufSize*0.15)) : Math.max(0, 1 - (i - bufSize*0.15)/(bufSize*0.85));
+      data[i] = (Math.random()*2 - 1) * env;
+    }
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const flt = ac.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.value = 1500;
+    flt.Q.value = 1.2;
+    const g = ac.createGain();
+    g.gain.value = big ? 0.55 : 0.30;
+    src.connect(flt); flt.connect(g); g.connect(masterGain);
+    src.start(t);
+  }
+
+  // Score blip
+  function scoreSound(){
+    if (!ac || muted) return;
+    ensureRunning();
+    const t = ac.currentTime;
+    [880, 1100, 1320].forEach((f, i) => {
+      const osc = ac.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = f;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0, t + i*0.07);
+      g.gain.linearRampToValueAtTime(0.10, t + i*0.07 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i*0.07 + 0.10);
+      osc.connect(g); g.connect(masterGain);
+      osc.start(t + i*0.07); osc.stop(t + i*0.07 + 0.12);
+    });
+  }
+
+  // Match win fanfare
+  function fanfareSound(){
+    if (!ac || muted) return;
+    ensureRunning();
+    const t = ac.currentTime;
+    const notes = [523, 659, 784, 1047, 784, 1047];
+    notes.forEach((f, i) => {
+      const osc = ac.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = f;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0, t + i*0.18);
+      g.gain.linearRampToValueAtTime(0.16, t + i*0.18 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i*0.18 + 0.20);
+      osc.connect(g); g.connect(masterGain);
+      osc.start(t + i*0.18); osc.stop(t + i*0.18 + 0.22);
+    });
+  }
+
+  // Whoosh (jump / smash setup)
+  function whooshSound(){
+    if (!ac || muted) return;
+    ensureRunning();
+    const t = ac.currentTime;
+    const bufSize = Math.floor(ac.sampleRate * 0.30);
+    const buf = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i=0; i<bufSize; i++){
+      data[i] = (Math.random()*2 - 1) * (1 - i/bufSize);
+    }
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const flt = ac.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.setValueAtTime(2000, t);
+    flt.frequency.exponentialRampToValueAtTime(400, t + 0.30);
+    flt.Q.value = 4;
+    const g = ac.createGain();
+    g.gain.value = 0.18;
+    src.connect(flt); flt.connect(g); g.connect(masterGain);
+    src.start(t);
+  }
+
+  // UI click
+  function clickSound(){
+    if (!ac || muted) return;
+    ensureRunning();
+    const t = ac.currentTime;
+    const osc = ac.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(900, t);
+    osc.frequency.exponentialRampToValueAtTime(1400, t + 0.04);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0, t);
+    g.gain.linearRampToValueAtTime(0.07, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t); osc.stop(t + 0.06);
+  }
+
+  return {
+    init: init, ensureRunning: ensureRunning,
+    hit: hitSound, bounce: bounceSound, smash: smashSound,
+    net: netSound, cheer: cheerSound, score: scoreSound,
+    fanfare: fanfareSound, whoosh: whooshSound, click: clickSound,
+    setCrowdVolume: setCrowdVolume, setMuted: setMuted,
+    isMuted: function(){ return muted; }
+  };
+})();
+// First user click anywhere primes the audio context (browser autoplay rules)
+document.addEventListener('click',     function(){ AudioSys.init(); AudioSys.ensureRunning(); }, { once:false });
+document.addEventListener('keydown',   function(){ AudioSys.init(); AudioSys.ensureRunning(); }, { once:false });
+document.addEventListener('touchstart',function(){ AudioSys.init(); AudioSys.ensureRunning(); }, { once:false });
+
+// ── Particle effects (instanced sphere meshes for impact dust/sparks) ──
+const ParticleSys = (function(){
+  const POOL = 80;
+  const pool = [];
+  const sharedGeo = new THREE.SphereGeometry(0.05, 6, 6);
+  for (let i=0; i<POOL; i++){
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0
+    });
+    const m = new THREE.Mesh(sharedGeo, mat);
+    m.visible = false;
+    scene.add(m);
+    pool.push({ mesh: m, vx:0, vy:0, vz:0, life:0, maxLife:1, baseScale:1 });
+  }
+  let nextIdx = 0;
+
+  function spawn(x, y, z, opts){
+    opts = opts || {};
+    const count = opts.count || 8;
+    const speed = opts.speed || 2.5;
+    const color = opts.color != null ? opts.color : 0xddeeff;
+    const size  = opts.size  || 1.0;
+    const upBias = opts.upBias != null ? opts.upBias : 0.5;
+    const lifeMin = opts.lifeMin || 0.35;
+    const lifeMax = opts.lifeMax || 0.7;
+    for (let i=0; i<count; i++){
+      const p = pool[nextIdx];
+      nextIdx = (nextIdx + 1) % POOL;
+      const ang = Math.random() * Math.PI * 2;
+      const vMag = speed * (0.5 + Math.random() * 0.8);
+      p.vx = Math.cos(ang) * vMag * (Math.random()*0.7 + 0.3);
+      p.vz = Math.sin(ang) * vMag * (Math.random()*0.7 + 0.3);
+      p.vy = upBias * vMag + Math.random() * speed * 0.6;
+      p.life = lifeMin + Math.random() * (lifeMax - lifeMin);
+      p.maxLife = p.life;
+      p.baseScale = size * (0.7 + Math.random() * 0.6);
+      p.mesh.position.set(x, y, z);
+      p.mesh.material.color.setHex(color);
+      p.mesh.material.opacity = 0.95;
+      p.mesh.scale.setScalar(p.baseScale);
+      p.mesh.visible = true;
+    }
+  }
+
+  function update(dt){
+    for (let i=0; i<POOL; i++){
+      const p = pool[i];
+      if (!p.mesh.visible) continue;
+      p.life -= dt;
+      if (p.life <= 0){ p.mesh.visible = false; continue; }
+      p.vy -= 9 * dt; // gravity
+      p.mesh.position.x += p.vx * dt;
+      p.mesh.position.y += p.vy * dt;
+      p.mesh.position.z += p.vz * dt;
+      // Bounce on ground (subtle)
+      if (p.mesh.position.y < 0.04){
+        p.mesh.position.y = 0.04;
+        p.vy = -p.vy * 0.35;
+        p.vx *= 0.6; p.vz *= 0.6;
+      }
+      const t = p.life / p.maxLife;
+      p.mesh.material.opacity = Math.max(0, t * 0.95);
+      p.mesh.scale.setScalar(p.baseScale * (0.4 + t * 0.6));
+    }
+  }
+
+  // Specific named effects
+  function dustBurst(x, z){ spawn(x, 0.04, z, { count: 14, speed: 2.0, color: 0xddccaa, upBias: 0.6 }); }
+  function sparkBurst(x, y, z){ spawn(x, y, z, { count: 20, speed: 5.0, color: 0xffee44, upBias: 0.0, lifeMin: 0.20, lifeMax: 0.45 }); }
+  function smashBurst(x, z){
+    spawn(x, 0.05, z, { count: 26, speed: 5.5, color: 0xff8844, upBias: 0.4, lifeMin: 0.4, lifeMax: 0.9 });
+    spawn(x, 0.05, z, { count: 14, speed: 7.0, color: 0xffcc66, upBias: 0.7, lifeMin: 0.3, lifeMax: 0.6 });
+  }
+  function netHit(x){ spawn(x, NET_H*0.5, 0, { count: 12, speed: 2.2, color: 0xaaccff, upBias: 0.0 }); }
+  function pickupBurst(x, y, z, color){
+    spawn(x, y, z, { count: 18, speed: 4.0, color: color || 0x80ffaa, upBias: 0.5 });
+  }
+
+  return {
+    spawn: spawn, update: update,
+    dustBurst: dustBurst, sparkBurst: sparkBurst,
+    smashBurst: smashBurst, netHit: netHit, pickupBurst: pickupBurst
+  };
+})();
+
+// ── Stadium (procedural crowd in stands + light rigs + banners) ──
+function buildStadium(){
+  const crowd = new THREE.Group();
+  scene.add(crowd);
+
+  // Procedural crowd: rows of small boxes in the stands
+  const colors = [0xff5050, 0x00b4ff, 0xb2ff14, 0xa050ff, 0xffdc32, 0x80fff0, 0xff9632, 0xff2080];
+  function row(zStart, zEnd, xStart, xEnd, ySeat, count){
+    for (let i=0; i<count; i++){
+      const t = i / (count - 1 || 1);
+      const x = xStart + (xEnd - xStart) * t + (Math.random() - 0.5) * 0.3;
+      const z = zStart + (Math.random() - 0.5) * 0.3 + (zEnd - zStart) * Math.random();
+      const c = colors[Math.floor(Math.random() * colors.length)];
+      // Body
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.45, 0.6, 0.45),
+        new THREE.MeshStandardMaterial({ color: c, roughness: 0.8 })
+      );
+      body.position.set(x, ySeat + 0.3, z);
+      crowd.add(body);
+      // Head
+      const head = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 0.3, 0.3),
+        new THREE.MeshStandardMaterial({ color: 0xd4956a, roughness: 0.9 })
+      );
+      head.position.set(x, ySeat + 0.78, z);
+      crowd.add(head);
+      // Random hair
+      const hair = new THREE.Mesh(
+        new THREE.BoxGeometry(0.32, 0.08, 0.32),
+        new THREE.MeshStandardMaterial({ color: Math.random() < 0.5 ? 0x2a1810 : 0x111111 })
+      );
+      hair.position.set(x, ySeat + 0.95, z);
+      crowd.add(hair);
+    }
+  }
+  // 4 stands of 3 rows each
+  for (let stand=0; stand<2; stand++){
+    const zSign = stand === 0 ? 1 : -1;
+    for (let r=0; r<3; r++){
+      const zStart = zSign * (CHL + 2 + r*1.3);
+      row(zStart, zStart + 1.0, -CW - 1, CW + 1, r*1.1, 18);
+    }
+  }
+  for (let stand=0; stand<2; stand++){
+    const xSign = stand === 0 ? 1 : -1;
+    for (let r=0; r<3; r++){
+      const xStart = xSign * (CHW + 2.5 + r*1.3);
+      row(-CHL, CHL, xStart, xStart + 1.0, r*1.1, 14);
+    }
+  }
+
+  // Light rigs (sphere "lamps" on tall posts at corners)
+  const lampMat = new THREE.MeshStandardMaterial({
+    color: 0xffffaa, emissive: 0xffffaa, emissiveIntensity: 1.0
+  });
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x444455, metalness: 0.6 });
+  function lampPost(x, z){
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 14, 10), postMat);
+    post.position.set(x, 7, z);
+    scene.add(post);
+    for (let i=-1; i<=1; i++){
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 8), lampMat);
+      lamp.position.set(x + i*0.7, 14, z);
+      scene.add(lamp);
+    }
+  }
+  lampPost(-CHW - 8, -CHL - 4);
+  lampPost( CHW + 8, -CHL - 4);
+  lampPost(-CHW - 8,  CHL + 4);
+  lampPost( CHW + 8,  CHL + 4);
+
+  // Banners along the stands
+  const bannerCols = [0xff5050, 0x00b4ff, 0xb2ff14, 0xa050ff];
+  function banner(x, z, w, rotY, idx){
+    const b = new THREE.Mesh(
+      new THREE.BoxGeometry(w, 0.8, 0.05),
+      new THREE.MeshStandardMaterial({ color: bannerCols[idx % bannerCols.length], emissive: bannerCols[idx % bannerCols.length], emissiveIntensity: 0.4 })
+    );
+    b.position.set(x, 4.0, z);
+    b.rotation.y = rotY;
+    scene.add(b);
+  }
+  banner(0,  CHL + 6, 12, 0,    0);
+  banner(0, -CHL - 6, 12, 0,    1);
+  banner( CHW + 8, 0, 14, Math.PI/2, 2);
+  banner(-CHW - 8, 0, 14, Math.PI/2, 3);
+
+  return crowd;
+}
+const stadiumCrowdGroup = buildStadium();
+
+// Crowd "wave" animation when something exciting happens
+let crowdWaveT = 0;
+function triggerCrowdWave(){ crowdWaveT = 1.0; }
+function updateCrowd(dt){
+  if (crowdWaveT > 0){
+    crowdWaveT = Math.max(0, crowdWaveT - dt * 1.2);
+    const phase = (1 - crowdWaveT) * Math.PI * 2;
+    stadiumCrowdGroup.children.forEach(function(child, i){
+      // jiggle the body meshes (every 3rd starting at 0)
+      if (i % 3 === 0){
+        const off = Math.sin(phase + i * 0.07) * 0.15 * crowdWaveT;
+        child.position.y = (child.userData._baseY != null ? child.userData._baseY : child.position.y);
+        if (child.userData._baseY == null) child.userData._baseY = child.position.y;
+        child.position.y = child.userData._baseY + Math.max(0, off);
+      }
+    });
+  }
+}
+
+// ── Court themes (hard / clay / grass / night) ─────────
+const COURT_THEMES = {
+  hard:  { surface: 0x0a5ab4, surroundCol: 0x1e4228, neon: 0x00b4ff, friction: 0.84, bounce: 0.58, fog: 0x070b18, sky: 0x070b18 },
+  clay:  { surface: 0xb04a30, surroundCol: 0x4a2818, neon: 0xffae40, friction: 0.74, bounce: 0.50, fog: 0x150a08, sky: 0x150a08 },
+  grass: { surface: 0x1c8a2c, surroundCol: 0x0a4a18, neon: 0xa0ff60, friction: 0.92, bounce: 0.65, fog: 0x051010, sky: 0x051010 },
+  night: { surface: 0x05122a, surroundCol: 0x080820, neon: 0xff40ff, friction: 0.84, bounce: 0.58, fog: 0x000004, sky: 0x000004 },
+};
+let activeTheme = 'hard';
+function applyTheme(name){
+  const t = COURT_THEMES[name] || COURT_THEMES.hard;
+  activeTheme = name;
+  scene.background = new THREE.Color(t.sky);
+  scene.fog = new THREE.FogExp2(t.fog, name === 'night' ? 0.022 : 0.018);
+  if (_surfaceMesh) _surfaceMesh.material.color.setHex(t.surface);
+  if (_surroundMesh) _surroundMesh.material.color.setHex(t.surroundCol);
+  for (let i=0; i<_neonMeshes.length; i++){
+    _neonMeshes[i].material.color.setHex(t.neon);
+    _neonMeshes[i].material.emissive.setHex(t.neon);
+  }
+  B.BOUNCE = t.bounce;
+  B._friction = t.friction;
+}
+
+// ── Stats tracking ─────────────────────────────────────
+const STATS = {
+  aces: [0, 0],
+  winners: [0, 0],
+  errors: [0, 0],
+  netCount: [0, 0],
+  outCount: [0, 0],
+  longestRally: 0,
+  currentRallyHits: 0,
+  fastestServeKmh: [0, 0],
+  totalSmashes: [0, 0],
+  reset: function(){
+    this.aces = [0, 0]; this.winners = [0, 0]; this.errors = [0, 0];
+    this.netCount = [0, 0]; this.outCount = [0, 0];
+    this.longestRally = 0; this.currentRallyHits = 0;
+    this.fastestServeKmh = [0, 0]; this.totalSmashes = [0, 0];
+  },
+  registerHit: function(pi, isSmash, isServe){
+    this.currentRallyHits++;
+    if (isSmash) this.totalSmashes[pi]++;
+  },
+  registerServeSpeed: function(pi, speedUnits){
+    // Convert world units/s roughly to km/h (game world units to "feel" — not real)
+    const kmh = speedUnits * 12;
+    if (kmh > this.fastestServeKmh[pi]) this.fastestServeKmh[pi] = Math.round(kmh);
+  },
+  finalizePoint: function(winner, reason, lastHitter){
+    if (this.currentRallyHits > this.longestRally) this.longestRally = this.currentRallyHits;
+    if (reason === 'out')  this.outCount[lastHitter]++;
+    if (reason === 'net')  this.netCount[lastHitter]++;
+    if (reason === 'double_bounce' && this.currentRallyHits <= 2) this.aces[winner]++;
+    else if (reason === 'double_bounce') this.winners[winner]++;
+    else this.errors[lastHitter]++;
+    this.currentRallyHits = 0;
+  }
+};
+
+// ── Achievements ──────────────────────────────────────
+const ACHIEVEMENTS = [
+  { id:'first_blood',   name:'First Blood',     desc:'Win your first point',         test: function(){ return SC.pts[0] + SC.games[0]*4 + SC.sets[0]*24 >= 1; } },
+  { id:'service_star',  name:'Service Star',    desc:'Hit a perfect-zone serve',     test: function(s){ return s && s.event === 'perfect_serve'; } },
+  { id:'smasher',       name:'Smasher',         desc:'Land a smash for a winner',    test: function(s){ return s && s.event === 'smash_winner'; } },
+  { id:'rally_king',    name:'Rally King',      desc:'Reach a 10-shot rally',        test: function(){ return STATS.longestRally >= 10; } },
+  { id:'ace',           name:'Ace!',            desc:'Score an ace serve',           test: function(){ return STATS.aces[0] >= 1; } },
+  { id:'set_winner',    name:'Set Winner',      desc:'Win a set',                    test: function(){ return SC.sets[0] >= 1; } },
+  { id:'champion',      name:'Champion',        desc:'Win a match',                  test: function(){ return SC.matchOver && SC.winner === 0; } },
+  { id:'sound_barrier', name:'Sound Barrier',   desc:'Hit a serve over 200 km/h',    test: function(){ return STATS.fastestServeKmh[0] >= 200; } },
+  { id:'comeback',      name:'Comeback Kid',    desc:'Win a game from 0-40 down',    test: function(s){ return s && s.event === 'comeback'; } },
+  { id:'shutout',       name:'Bagel',           desc:'Win a set 6-0',                test: function(){ return SC.sets[0] >= 1 && SC.games[1] === 0 && SC.games[0] === 0 && SC.sets[0] >= 1; } },
+];
+const earnedAch = {};
+function checkAchievements(eventTag){
+  for (let i=0; i<ACHIEVEMENTS.length; i++){
+    const a = ACHIEVEMENTS[i];
+    if (earnedAch[a.id]) continue;
+    try {
+      if (a.test(eventTag)){
+        earnedAch[a.id] = true;
+        showAchievementToast(a);
+      }
+    } catch(_){}
+  }
+}
+function showAchievementToast(a){
+  const t = document.getElementById('ach-toast');
+  if (!t) return;
+  document.getElementById('ach-name').textContent = a.name;
+  document.getElementById('ach-desc').textContent = a.desc;
+  t.style.display = 'flex';
+  t.style.opacity = '0';
+  setTimeout(function(){ t.style.opacity = '1'; t.style.transform = 'translateX(-50%) translateY(0)'; }, 10);
+  setTimeout(function(){
+    t.style.opacity = '0'; t.style.transform = 'translateX(-50%) translateY(-20px)';
+    setTimeout(function(){ t.style.display = 'none'; }, 400);
+  }, 3200);
+  AudioSys.score();
+}
+
+// ── Settings (mute, theme, graphics) ──────────────────
+const SETTINGS = {
+  muted: false,
+  crowdLevel: 0.18,
+  theme: 'hard',
+  shadows: true,
+  bloom: false,
+  load: function(){
+    try {
+      const raw = localStorage.getItem('spike_tennis_settings');
+      if (raw){
+        const s = JSON.parse(raw);
+        if (s.muted != null) this.muted = !!s.muted;
+        if (s.crowdLevel != null) this.crowdLevel = +s.crowdLevel;
+        if (s.theme) this.theme = s.theme;
+        if (s.shadows != null) this.shadows = !!s.shadows;
+      }
+    } catch(_){}
+  },
+  save: function(){
+    try {
+      localStorage.setItem('spike_tennis_settings', JSON.stringify({
+        muted: this.muted, crowdLevel: this.crowdLevel, theme: this.theme, shadows: this.shadows
+      }));
+    } catch(_){}
+  },
+  apply: function(){
+    AudioSys.setMuted(this.muted);
+    AudioSys.setCrowdVolume(this.muted ? 0 : this.crowdLevel);
+    if (renderer) renderer.shadowMap.enabled = this.shadows;
+  }
+};
+SETTINGS.load();
 
 // ── Camera (Roblox 3rd-person: directly behind the character) ──
 const CAM = { yaw:0, pitch:0.22, dist:5.2, tx:0, ty:1.6, tz:9 };
@@ -643,7 +1263,13 @@ function doServeHit(pi){
   const tz = P[pi].side==='near' ? -SVC_Z*0.65 : SVC_Z*0.65;
   // Launch from elevated position (jump serve) — racket meets ball above the head
   const fromY = 2.2 + (P[pi].jumpH||0) * 1.4;
-  B.launch(pi, tx, tz, 6 + quality*8, 0.4, fromY);
+  const srvSpeed = 6 + quality*8;
+  B.launch(pi, tx, tz, srvSpeed, 0.4, fromY);
+  AudioSys.hit(0.9 + quality*0.4);
+  ParticleSys.sparkBurst(P[pi].x, fromY, P[pi].z + (P[pi].side==='near'?-0.3:0.3));
+  STATS.registerHit(pi, false, true);
+  STATS.registerServeSpeed(pi, srvSpeed);
+  if (powerQ >= 1) checkAchievements({ event: 'perfect_serve' });
   gPhase='rally'; P[pi].serving=false;
 }
 
@@ -680,7 +1306,12 @@ function doHit(who){
     const aimZ = p.side==='near' ? -(7 + Math.random()*3) : (7 + Math.random()*3);
     p.swingT = 28;                                // longer swing animation
     showMsg('🔥 SMASH!', 800);
+    AudioSys.smash();
+    AudioSys.whoosh();
+    ParticleSys.sparkBurst(p.x, fromY, p.z);
     B.launch(pi, aimX, aimZ, spd, arcH, fromY);
+    STATS.registerHit(pi, true, false);
+    triggerCrowdWave();
     if (peerConn && isHost){ try{ peerConn.send({type:'hit', pi:pi, tx:aimX, tz:aimZ, spd:spd, arcH:arcH, y0:fromY}); }catch(_){} }
     return;
   }
@@ -690,6 +1321,9 @@ function doHit(who){
   else if (KEYS.KeyG){ arcH=0.7; spd=8.0; }
   spd *= 0.7 + q*0.58;
   B.launch(pi, tx, tz, spd, arcH);
+  AudioSys.hit(0.5 + q * 0.6);
+  ParticleSys.sparkBurst(p.x, B.pos.y, p.z);
+  STATS.registerHit(pi, false, false);
   if (peerConn && isHost){ try{ peerConn.send({type:'hit', pi:pi, tx:tx, tz:tz, spd:spd, arcH:arcH}); }catch(_){} }
 }
 
@@ -718,6 +1352,10 @@ function updateAI(dt){
         const tz = p.side==='near' ? -SVC_Z*0.7 : SVC_Z*0.7;
         const srvSpd = (4 + Math.random()*2) * D.power;
         B.launch(pi, tx, tz, srvSpd, 1.4);
+        AudioSys.hit(0.85);
+        ParticleSys.sparkBurst(p.x, 1.5, p.z);
+        STATS.registerHit(pi, false, true);
+        STATS.registerServeSpeed(pi, srvSpd);
         gPhase='rally'; P[pi].serving=false;
         showTossUI(false);
       }
@@ -742,6 +1380,9 @@ function updateAI(dt){
         const spd = (4.5+Math.random()*2)*D.power;
         const arcH = 1.4+Math.random()*0.8;
         B.launch(pi, tx, tz, spd, arcH);
+        AudioSys.hit(0.6);
+        ParticleSys.sparkBurst(p.x, B.pos.y, p.z);
+        STATS.registerHit(pi, false, false);
         aiCDs[pi] = D.reactCD;
       }
     }
@@ -849,6 +1490,11 @@ function syncCharVisuals(){
 
 // ── Bounce / Net / Endpoint ──────────────────────────
 function onBounce(){
+  // Audio + particles every bounce, even outside the rally
+  const speed = Math.hypot(B.vel.x, B.vel.y, B.vel.z);
+  const intensity = Math.min(1, speed / 14);
+  AudioSys.bounce(intensity);
+  ParticleSys.dustBurst(B.pos.x, B.pos.z);
   if (gPhase!=='rally') return;
   const onNear = B.pos.z>0;
   const inX = Math.abs(B.pos.x) <= CHW;
@@ -857,6 +1503,8 @@ function onBounce(){
   if (B.bounces>=2) endPoint(onNear?1:0, 'double_bounce');
 }
 function onNet(){
+  AudioSys.net();
+  ParticleSys.netHit(B.pos.x);
   if (gPhase!=='rally' && gPhase!=='serve_toss') return;
   endPoint(B.lastHitter<2?1:0, 'net');
 }
@@ -865,11 +1513,28 @@ function endPoint(winner, reason){
   showServeUI(false); showTossUI(false);
   const msgs = { out:'OUT  ·  P'+(winner+1)+' POINT', net:'NET  ·  P'+(winner+1)+' POINT', double_bounce:'P'+(winner+1)+' POINT' };
   showMsg(msgs[reason] || ('P'+(winner+1)+' POINT'), 1400);
+  // Stats tracking
+  STATS.finalizePoint(winner, reason, B.lastHitter);
+  if (winner === 0) AudioSys.cheer(false);
+  AudioSys.score();
+  triggerCrowdWave();
   const result = SC.award(winner);
   updateScoreHUD();
   ptTimer=2400;
-  if (result && result.msg) setTimeout(()=>showMsg(result.msg, 2000), 1000);
-  if (SC.matchOver) setTimeout(()=>{ gPhase='match_over'; }, 2700);
+  if (result && result.msg){
+    setTimeout(function(){ showMsg(result.msg, 2000); }, 1000);
+    // Big cheer for game/set/match
+    if (/GAME|SET|MATCH|WINS/i.test(result.msg)){
+      setTimeout(function(){ AudioSys.cheer(true); triggerCrowdWave(); }, 1100);
+    }
+  }
+  checkAchievements({ event: 'point_end', winner: winner, reason: reason });
+  if (SC.matchOver){
+    setTimeout(function(){
+      gPhase='match_over';
+      AudioSys.fanfare();
+    }, 2700);
+  }
 }
 function startPoint(){
   const srv = SC.server;
@@ -913,10 +1578,16 @@ function startMode(mode, conn, host, diff){
   DIFF_CUR = (diff && DIFF[diff]) ? DIFF[diff] : DIFF.medium;
   setupMode(mode);
   SC.reset();
+  STATS.reset();
+  AudioSys.init();
+  AudioSys.ensureRunning();
+  AudioSys.setCrowdVolume(SETTINGS.muted ? 0 : SETTINGS.crowdLevel);
+  applyTheme(SETTINGS.theme);
   document.getElementById('lobby').style.display='none';
   document.getElementById('diff-panel').style.display='none';
   document.getElementById('online-panel').style.display='none';
   const cp = document.getElementById('char-panel'); if (cp) cp.style.display='none';
+  const sp = document.getElementById('settings-panel'); if (sp) sp.style.display='none';
   showHUD(true);
   gPhase='countdown'; cdVal=3; cdTimer=0;
   showMsg('3', 900);
@@ -953,7 +1624,7 @@ function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
   frameN++;
 
-  if (gPhase==='lobby'){ updateCamera(); renderer.render(scene, camera); return; }
+  if (gPhase==='lobby'){ updateCamera(); ParticleSys.update(dt); updateCrowd(dt); renderer.render(scene, camera); return; }
 
   if (gPhase==='countdown') updateCountdown(dt);
 
@@ -990,6 +1661,8 @@ function animate(){
   updatePhysics(dt);
   updateCamera();
   syncCharVisuals();
+  ParticleSys.update(dt);
+  updateCrowd(dt);
 
   if (gPhase==='match_over'){
     showMsg('P'+(SC.winner+1)+' WINS THE MATCH!\n\nClick to return', 99999);
@@ -1070,6 +1743,104 @@ document.getElementById('d-med').onclick    = function(){ pickDiff('medium'); };
 document.getElementById('d-hard').onclick   = function(){ pickDiff('hard'); };
 document.getElementById('d-back').onclick   = function(){ closeDiff(); };
 document.getElementById('back-btn').onclick = function(){ goLobby(); };
+
+// ── Settings panel wireup ────────────────────────────
+function setToggle(id, on){
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('on', !!on);
+}
+function openSettings(){
+  AudioSys.click();
+  document.getElementById('settings-panel').style.display = 'flex';
+  // Reflect current state
+  setToggle('s-sound',   !SETTINGS.muted);
+  setToggle('s-shadows', SETTINGS.shadows);
+  document.getElementById('s-crowd').value = Math.round(SETTINGS.crowdLevel * 100);
+  document.querySelectorAll('#s-themes .theme-card').forEach(function(c){
+    c.classList.toggle('selected', c.getAttribute('data-th') === SETTINGS.theme);
+  });
+}
+function closeSettings(){
+  AudioSys.click();
+  document.getElementById('settings-panel').style.display = 'none';
+}
+document.getElementById('t-settings').onclick = openSettings;
+document.getElementById('s-close').onclick    = closeSettings;
+document.getElementById('s-sound').onclick    = function(){
+  SETTINGS.muted = !SETTINGS.muted;
+  setToggle('s-sound', !SETTINGS.muted);
+  SETTINGS.apply(); SETTINGS.save();
+  if (!SETTINGS.muted) AudioSys.click();
+};
+document.getElementById('s-shadows').onclick  = function(){
+  SETTINGS.shadows = !SETTINGS.shadows;
+  setToggle('s-shadows', SETTINGS.shadows);
+  SETTINGS.apply(); SETTINGS.save();
+  AudioSys.click();
+};
+document.getElementById('s-crowd').oninput = function(e){
+  SETTINGS.crowdLevel = (+e.target.value) / 100;
+  SETTINGS.apply(); SETTINGS.save();
+};
+document.querySelectorAll('#s-themes .theme-card').forEach(function(c){
+  c.onclick = function(){
+    AudioSys.click();
+    SETTINGS.theme = c.getAttribute('data-th');
+    document.querySelectorAll('#s-themes .theme-card').forEach(function(o){ o.classList.remove('selected'); });
+    c.classList.add('selected');
+    applyTheme(SETTINGS.theme);
+    SETTINGS.save();
+  };
+});
+
+// ── Stats panel wireup ───────────────────────────────
+function refreshStatsHUD(){
+  function set(id, v){ const e = document.getElementById(id); if (e) e.textContent = v; }
+  set('st-aces-0',  STATS.aces[0]);
+  set('st-aces-1',  STATS.aces[1]);
+  set('st-win-0',   STATS.winners[0]);
+  set('st-win-1',   STATS.winners[1]);
+  set('st-err-0',   STATS.errors[0]);
+  set('st-err-1',   STATS.errors[1]);
+  set('st-smash-0', STATS.totalSmashes[0]);
+  set('st-smash-1', STATS.totalSmashes[1]);
+  set('st-spd-0',   STATS.fastestServeKmh[0] + ' km/h');
+  set('st-spd-1',   STATS.fastestServeKmh[1] + ' km/h');
+  set('st-rally',   STATS.longestRally + ' shots');
+}
+document.getElementById('t-stats').onclick = function(){
+  AudioSys.click();
+  refreshStatsHUD();
+  document.getElementById('stats-panel').style.display = 'flex';
+};
+document.getElementById('st-close').onclick = function(){
+  AudioSys.click();
+  document.getElementById('stats-panel').style.display = 'none';
+};
+
+// ── Tutorial toggle ──────────────────────────────────
+let tutOn = false;
+document.getElementById('t-tutorial').onclick = function(){
+  AudioSys.click();
+  tutOn = !tutOn;
+  document.getElementById('tutorial').style.display = tutOn ? 'block' : 'none';
+};
+
+// Apply settings at startup
+SETTINGS.apply();
+applyTheme(SETTINGS.theme);
+
+// Hide corner tools while on game-over screen so they don't overlap the message
+function setCornerToolsVisible(v){
+  document.getElementById('corner-tools').style.display = v ? 'flex' : 'none';
+}
+setCornerToolsVisible(true);
+
+// Sound on lobby card hovers
+document.querySelectorAll('#lobby .card, .dcard, .char-card').forEach(function(el){
+  el.addEventListener('mouseenter', function(){ AudioSys.click(); });
+});
 
 const cgo = document.getElementById('c-go');
 const cback = document.getElementById('c-back');
