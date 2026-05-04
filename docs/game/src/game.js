@@ -1687,6 +1687,5910 @@ const Tournament = (function(){
   return { start: start, advance: advance, onMatchOver: onMatchOver, isActive: isActive, reset: reset };
 })();
 
+// ── Commentator system (text "voice" reacting to game events) ──
+const Commentator = (function(){
+  // Massive line bank organized by event type. Random pick from category.
+  const lines = {
+    serve_perfect: [
+      'Beautiful serve! Right on the line.',
+      'Pinpoint accuracy on that one!',
+      'Pure power, pure placement.',
+      'Could not have hit that any better.',
+      'A serve straight from the textbook.',
+      'Clinical execution.',
+      'Service motion looking like a metronome.',
+      'That serve had everything — speed, spin, depth.',
+      'Untouchable!',
+      'Ball boy didn\'t even move.'
+    ],
+    serve_good: [
+      'Solid serve, gets the job done.',
+      'A reliable first serve.',
+      'No frills, just business.',
+      'Decent depth on that one.',
+      'A serve that gives nothing away.',
+      'Workmanlike service.',
+      'Effective if not spectacular.',
+      'Plenty of pace on that delivery.'
+    ],
+    serve_weak: [
+      'A bit tentative on that serve.',
+      'Lost some pace there.',
+      'Service motion looked rushed.',
+      'Not the cleanest contact.',
+      'Will want a better one in next time.',
+      'A bit of a nothing serve.',
+      'Easy to read.',
+      'Forgettable delivery.'
+    ],
+    smash: [
+      'OH! What a smash!',
+      'You can hear that one in the cheap seats!',
+      'Drove that into the canvas!',
+      'Authority on that overhead!',
+      'Smashed it down with intent.',
+      'Vicious overhead!',
+      'No coming back from that.',
+      'Brutal, brutal smash!',
+      'Couldn\'t put more on it if they tried.',
+      'Game-defining smash right there.',
+      'Pure venom on that overhead.'
+    ],
+    ace: [
+      'ACE! Untouched.',
+      'Service winner — beautifully placed.',
+      'Just an ace. Walk-up service.',
+      'Free point on the serve.',
+      'No reading that one — ace.',
+      'Clinical. ACE.',
+      'Untouched! What a serve.',
+      'And another ace to add to the tally.'
+    ],
+    winner: [
+      'Winner! Threaded the needle.',
+      'Beautiful winner down the line.',
+      'Picked the corner perfectly.',
+      'Rope! That ball never came up.',
+      'Winner! Crowd loving it.',
+      'What a strike — point won.',
+      'Painted the line!',
+      'Inch-perfect winner.',
+      'Hit clean off the strings.',
+      'Glorious shot, glorious winner.'
+    ],
+    error_net: [
+      'Into the net. That\'s a tough one.',
+      'Caught the tape and dropped.',
+      'Couldn\'t clear the net there.',
+      'Hung in the net.',
+      'Net error — sloppy.',
+      'A simple shot dragged into the net.',
+      'They\'ll feel that error.',
+      'That ball never had a chance to make it.'
+    ],
+    error_out: [
+      'Long! That ball sailed.',
+      'Wide! Couldn\'t pull it back.',
+      'Out by a yard.',
+      'Goes long. Cheap point given away.',
+      'Frustrating error there.',
+      'Just couldn\'t keep that one in.',
+      'Rifled it long.',
+      'Tried to do too much with that one.'
+    ],
+    deuce: [
+      'And we are at deuce.',
+      'Deuce. Pressure point coming up.',
+      'The game gets tighter — deuce.',
+      'Deuce. This game is a battle.',
+      'Cannot separate them — deuce.'
+    ],
+    advantage: [
+      'Advantage. One point from the game.',
+      'Adv — they smell blood.',
+      'On the brink now. Advantage.',
+      'Game point coming up.',
+      'Big point next.'
+    ],
+    game_won: [
+      'Game! Held with authority.',
+      'And the game goes their way.',
+      'Game closed out cleanly.',
+      'They take the game. Crowd approves.',
+      'Game won. Onto the next.',
+      'Class through and through. Game.'
+    ],
+    set_won: [
+      'SET! That\'s one in the bag.',
+      'Set goes their way.',
+      'Set closed out!',
+      'And they take the set!',
+      'Massive set won.',
+      'Tense, tense set — but they\'ve got it.'
+    ],
+    match_won: [
+      '🏆 MATCH! Champion!',
+      'It\'s ALL OVER! Champion!',
+      'They\'ve done it! Match point converted!',
+      'CHAMPION! What a performance!',
+      'Sealed and delivered — match won!'
+    ],
+    rally_long: [
+      'These two are putting on a show!',
+      'Outrageous rally — what a watch!',
+      'Both players unwilling to give an inch.',
+      'A rally for the highlight reel!',
+      'Phenomenal exchange of strokes!',
+      'Tennis at its absolute best right here.',
+      'Ten shots… twelve… they keep going!'
+    ],
+    point_won_p1: [
+      'Point to the home player!',
+      'P1 takes that one.',
+      'Great point for P1.',
+      'P1 capitalizes on the opening.'
+    ],
+    point_won_p2: [
+      'Opponent steals that one.',
+      'Tough loss on that point.',
+      'P2 takes it.',
+      'Opponent comes through on that one.'
+    ],
+    countdown_3: ['Players ready. Match starting in 3…','Here we go in 3…','3…'],
+    countdown_2: ['2…','Two seconds…','2…'],
+    countdown_1: ['1… stand by…','1…','Match starting!'],
+    countdown_go: ['Play ball!','Off we go!','Game on!','Begin!'],
+    pickup: [
+      'Power-up grabbed! That changes things.',
+      'Bonus collected — could be a game-changer.',
+      'They snagged the pick-up!',
+      'Power-up activated!'
+    ],
+    practice_target_hit: [
+      'Target hit! Clinical.',
+      'Bullseye!',
+      'Right in the kitchen.',
+      'Sniper-like accuracy.',
+      'Drops it on the spot.',
+      'Direct hit!'
+    ],
+    serve_meter_clicked: [
+      'Power locked in.',
+      'Loaded and ready.',
+      'Power set.',
+      'Ready for the toss.'
+    ],
+  };
+
+  let queue = [];
+  let lastShown = 0;
+  let lastCategory = '';
+  let lastSpoken = {};
+
+  function pickFrom(category){
+    const arr = lines[category];
+    if (!arr || arr.length === 0) return null;
+    // Don't repeat same line within 4 seconds
+    const now = performance.now();
+    let attempts = 0;
+    let chosen = null;
+    while (attempts < 6){
+      const ix = Math.floor(Math.random() * arr.length);
+      chosen = arr[ix];
+      const last = lastSpoken[chosen] || 0;
+      if (now - last > 4000) break;
+      attempts++;
+    }
+    if (chosen){
+      lastSpoken[chosen] = now;
+    }
+    return chosen;
+  }
+
+  function say(category, opts){
+    if (!category) return;
+    const txt = pickFrom(category);
+    if (!txt) return;
+    const priority = opts && opts.priority ? opts.priority : 1;
+    queue.push({ text: txt, priority: priority, time: performance.now() });
+    queue.sort(function(a,b){ return b.priority - a.priority; });
+    if (queue.length > 4) queue = queue.slice(0, 4);
+    lastCategory = category;
+    flush();
+  }
+
+  function flush(){
+    const banner = document.getElementById('comm-banner');
+    if (!banner) return;
+    const now = performance.now();
+    if (queue.length === 0){
+      if (now - lastShown > 4500){
+        banner.style.opacity = '0';
+        setTimeout(function(){ banner.style.display = 'none'; }, 350);
+      }
+      return;
+    }
+    const item = queue.shift();
+    lastShown = now;
+    banner.textContent = '🎙 ' + item.text;
+    banner.style.display = 'block';
+    banner.style.opacity = '0.95';
+    setTimeout(function(){
+      flush();
+    }, 2200);
+  }
+
+  function reactToServe(quality){
+    if (quality > 0.85) say('serve_perfect');
+    else if (quality > 0.55) say('serve_good');
+    else say('serve_weak');
+  }
+
+  function reactToPointEnd(winner, reason, rallyShots){
+    if (rallyShots >= 10) say('rally_long', { priority: 2 });
+    if (reason === 'net') say('error_net');
+    else if (reason === 'out') say('error_out');
+    else if (reason === 'double_bounce' && rallyShots <= 2) say('ace', { priority: 2 });
+    else if (reason === 'double_bounce') say('winner', { priority: 2 });
+    if (winner === 0) say('point_won_p1');
+    else say('point_won_p2');
+  }
+
+  function reactToScore(msg){
+    if (/MATCH/i.test(msg)) say('match_won', { priority: 5 });
+    else if (/SET/i.test(msg)) say('set_won', { priority: 4 });
+    else if (/GAME/i.test(msg)) say('game_won', { priority: 3 });
+    else if (/ADV/i.test(msg)) say('advantage', { priority: 2 });
+    else if (/DEUCE/i.test(msg)) say('deuce', { priority: 2 });
+  }
+
+  function reactToCountdown(n){
+    if (n === 3) say('countdown_3');
+    else if (n === 2) say('countdown_2');
+    else if (n === 1) say('countdown_1');
+    else say('countdown_go');
+  }
+
+  function reactToSmash(){ say('smash', { priority: 3 }); }
+  function reactToPickup(){ say('pickup'); }
+  function reactToTargetHit(){ say('practice_target_hit'); }
+  function reactToPowerLock(){ say('serve_meter_clicked'); }
+
+  return {
+    say: say,
+    reactToServe: reactToServe,
+    reactToPointEnd: reactToPointEnd,
+    reactToScore: reactToScore,
+    reactToCountdown: reactToCountdown,
+    reactToSmash: reactToSmash,
+    reactToPickup: reactToPickup,
+    reactToTargetHit: reactToTargetHit,
+    reactToPowerLock: reactToPowerLock
+  };
+})();
+
+// ── Profile / XP / Persistent Progression ──────────────
+const Profile = (function(){
+  const KEY = 'spike_tennis_profile_v1';
+  const data = {
+    xp: 0, level: 1, totalMatches: 0, totalWins: 0, totalAces: 0,
+    totalSmashes: 0, totalRallies: 0, totalPlayTime: 0,
+    bestRally: 0, fastestServe: 0, totalPointsWon: 0,
+    unlockedSkins: ['BLAZE','AZURE','NEON','STORM','FROST','EMBER'],
+    unlockedThemes: ['hard','clay','grass','night'],
+    achievements: [],
+    practiceBest: 0,
+    tournamentWins: 0,
+  };
+  function load(){
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw){
+        const parsed = JSON.parse(raw);
+        for (const k in data){ if (parsed[k] !== undefined) data[k] = parsed[k]; }
+      }
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch(_){}
+  }
+  function awardXP(amount, reason){
+    data.xp += amount;
+    let leveled = false;
+    while (data.xp >= xpForLevel(data.level + 1)){
+      data.level++;
+      leveled = true;
+    }
+    save();
+    if (leveled){
+      showMsg('⭐ LEVEL UP! Now Level ' + data.level, 2400);
+      AudioSys.fanfare();
+      // Unlock content based on level
+      const unlocks = unlocksForLevel(data.level);
+      if (unlocks){
+        for (let i=0; i<unlocks.length; i++){
+          const u = unlocks[i];
+          if (u.type === 'skin' && data.unlockedSkins.indexOf(u.id) < 0){
+            data.unlockedSkins.push(u.id);
+            setTimeout(function(){ showMsg('🆕 UNLOCKED: ' + u.id, 2200); }, 1200);
+          } else if (u.type === 'theme' && data.unlockedThemes.indexOf(u.id) < 0){
+            data.unlockedThemes.push(u.id);
+            setTimeout(function(){ showMsg('🆕 NEW COURT: ' + u.id.toUpperCase(), 2200); }, 1200);
+          }
+        }
+        save();
+      }
+    }
+  }
+  function xpForLevel(level){
+    // Quadratic curve: 100, 250, 450, 700, 1000, 1350...
+    return Math.floor(50 * level * (level + 1));
+  }
+  function unlocksForLevel(level){
+    const tab = {
+      2: [{ type:'skin', id:'VOLT' }],
+      3: [{ type:'skin', id:'JADE' }],
+      4: [{ type:'skin', id:'ROGUE' }],
+      5: [{ type:'theme', id:'sunset' }],
+      6: [{ type:'skin', id:'OBSIDIAN' }],
+      7: [{ type:'skin', id:'CORAL' }],
+      8: [{ type:'theme', id:'rain' }],
+      10: [{ type:'skin', id:'TITAN' }],
+    };
+    return tab[level];
+  }
+  function recordMatch(won){
+    data.totalMatches++;
+    if (won) {
+      data.totalWins++;
+      awardXP(150, 'win');
+    } else {
+      awardXP(60, 'played');
+    }
+    save();
+  }
+  function recordPoint(){ data.totalPointsWon++; awardXP(2); }
+  function recordSmash(){ data.totalSmashes++; awardXP(8, 'smash'); }
+  function recordAce(){ data.totalAces++; awardXP(25, 'ace'); }
+  function recordRally(shots){
+    data.totalRallies++;
+    if (shots > data.bestRally){ data.bestRally = shots; awardXP(20); }
+    if (shots >= 10) awardXP(10);
+  }
+  function recordServe(speedKmh){
+    if (speedKmh > data.fastestServe){
+      data.fastestServe = speedKmh;
+      awardXP(10);
+    }
+  }
+  function recordTournamentWin(){
+    data.tournamentWins++;
+    awardXP(300, 'tournament');
+    save();
+  }
+  function recordPracticeScore(score){
+    if (score > data.practiceBest){
+      data.practiceBest = score;
+      awardXP(40);
+      save();
+    }
+  }
+  function getXPProgress(){
+    const cur = xpForLevel(data.level);
+    const next = xpForLevel(data.level + 1);
+    const range = next - cur;
+    const into = data.xp - cur;
+    return { progress: into / range, cur: cur, next: next, level: data.level, xp: data.xp };
+  }
+  function reset(){
+    for (const k in data){ delete data[k]; }
+    Object.assign(data, {
+      xp: 0, level: 1, totalMatches: 0, totalWins: 0, totalAces: 0,
+      totalSmashes: 0, totalRallies: 0, totalPlayTime: 0,
+      bestRally: 0, fastestServe: 0, totalPointsWon: 0,
+      unlockedSkins: ['BLAZE','AZURE','NEON','STORM','FROST','EMBER'],
+      unlockedThemes: ['hard','clay','grass','night'],
+      achievements: [],
+      practiceBest: 0,
+      tournamentWins: 0,
+    });
+    save();
+  }
+  load();
+  return {
+    data: data, save: save, load: load,
+    awardXP: awardXP,
+    recordMatch: recordMatch, recordPoint: recordPoint,
+    recordSmash: recordSmash, recordAce: recordAce,
+    recordRally: recordRally, recordServe: recordServe,
+    recordTournamentWin: recordTournamentWin,
+    recordPracticeScore: recordPracticeScore,
+    getXPProgress: getXPProgress,
+    reset: reset,
+    xpForLevel: xpForLevel,
+    unlocksForLevel: unlocksForLevel,
+  };
+})();
+
+// ── AI Personalities (different play styles) ───────────
+const AIPersonalities = {
+  baseliner: {
+    name: 'Baseliner',
+    description: 'Stays back, hits with depth, grinds out points',
+    aimDepth: 0.85,        // how far back to aim
+    aimVariance: 1.0,
+    powerMult: 1.0,
+    smashChance: 0.10,
+    lobChance: 0.15,
+    sliceChance: 0.08,
+    topspinChance: 0.45,
+    flatChance: 0.32,
+    netRushChance: 0.05,
+    movementPattern: 'lateral',
+    homeZ: 0.85,           // 0=net, 1=baseline
+  },
+  serveVolley: {
+    name: 'Serve & Volley',
+    description: 'Big serve, rushes the net',
+    aimDepth: 0.55,
+    aimVariance: 0.8,
+    powerMult: 1.15,
+    smashChance: 0.22,
+    lobChance: 0.05,
+    sliceChance: 0.18,
+    topspinChance: 0.20,
+    flatChance: 0.57,
+    netRushChance: 0.45,
+    movementPattern: 'aggressive',
+    homeZ: 0.55,
+  },
+  defender: {
+    name: 'Defender',
+    description: 'Pushes back high looping balls, runs everything down',
+    aimDepth: 0.92,
+    aimVariance: 1.4,
+    powerMult: 0.78,
+    smashChance: 0.04,
+    lobChance: 0.32,
+    sliceChance: 0.18,
+    topspinChance: 0.42,
+    flatChance: 0.08,
+    netRushChance: 0.0,
+    movementPattern: 'reactive',
+    homeZ: 1.0,
+  },
+  aggressor: {
+    name: 'Aggressor',
+    description: 'Goes for everything, big swings, big errors',
+    aimDepth: 0.75,
+    aimVariance: 1.6,
+    powerMult: 1.3,
+    smashChance: 0.30,
+    lobChance: 0.08,
+    sliceChance: 0.05,
+    topspinChance: 0.20,
+    flatChance: 0.67,
+    netRushChance: 0.30,
+    movementPattern: 'aggressive',
+    homeZ: 0.65,
+  },
+  counterPuncher: {
+    name: 'Counter-Puncher',
+    description: 'Lets you make errors, redirects pace',
+    aimDepth: 0.80,
+    aimVariance: 0.7,
+    powerMult: 0.92,
+    smashChance: 0.06,
+    lobChance: 0.20,
+    sliceChance: 0.30,
+    topspinChance: 0.30,
+    flatChance: 0.20,
+    netRushChance: 0.08,
+    movementPattern: 'patient',
+    homeZ: 0.92,
+  },
+  spinner: {
+    name: 'Spinner',
+    description: 'Heavy topspin, kicks balls high',
+    aimDepth: 0.75,
+    aimVariance: 1.1,
+    powerMult: 0.95,
+    smashChance: 0.15,
+    lobChance: 0.10,
+    sliceChance: 0.05,
+    topspinChance: 0.65,
+    flatChance: 0.20,
+    netRushChance: 0.05,
+    movementPattern: 'lateral',
+    homeZ: 0.88,
+  },
+};
+let aiPersonality = 'baseliner';
+function setAIPersonality(name){
+  if (AIPersonalities[name]) aiPersonality = name;
+}
+function getAIPersonality(){ return AIPersonalities[aiPersonality] || AIPersonalities.baseliner; }
+
+// ── Match commentary banner element creator ────────────
+function ensureCommBanner(){
+  let b = document.getElementById('comm-banner');
+  if (b) return b;
+  b = document.createElement('div');
+  b.id = 'comm-banner';
+  b.style.cssText =
+    'position:fixed;top:62px;left:50%;transform:translateX(-50%);' +
+    'background:rgba(5,8,15,.78);border:1px solid rgba(0,180,255,.28);' +
+    'border-radius:10px;padding:.55rem 1.1rem;font-family:Orbitron,sans-serif;' +
+    'font-size:.78rem;color:#cdd9e6;z-index:55;letter-spacing:.04em;' +
+    'pointer-events:none;display:none;opacity:0;transition:opacity .35s;' +
+    'max-width:80vw;text-align:center';
+  document.body.appendChild(b);
+  return b;
+}
+ensureCommBanner();
+
+// ── Tutorial system (5-step interactive walk-through) ──
+const Tutorial = (function(){
+  const steps = [
+    { title:'WELCOME', body:'Welcome to Spike Tennis! Use WASD to move around.', highlight:'wasd', wait:5 },
+    { title:'JUMP', body:'Press LSHIFT or V to jump. Try jumping now!', highlight:'jump', wait:6 },
+    { title:'CAMERA', body:'Right-click and drag to orbit the camera. Mouse wheel to zoom.', highlight:'cam', wait:7 },
+    { title:'SERVE', body:'When serving, watch the meter at the bottom. Click when it\'s in the GREEN zone (right side).', highlight:'serve', wait:9 },
+    { title:'HIT', body:'During rally, click or press SPACE to hit. Get close to the ball first!', highlight:'hit', wait:9 },
+    { title:'SMASH', body:'Jump up when ball is overhead, then hit — auto SMASH!', highlight:'smash', wait:8 },
+    { title:'WIN', body:'Score points by making your opponent miss. First to 4 wins game, 6 wins set, 2 sets wins match.', highlight:'win', wait:10 },
+    { title:'GO', body:'Now go win some matches!', highlight:'go', wait:5 },
+  ];
+  let active = false;
+  let stepIdx = 0;
+  let stepTimer = 0;
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'tutorial-panel';
+    panel.style.cssText =
+      'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
+      'background:rgba(8,12,22,.96);border:1.5px solid rgba(0,180,255,.45);' +
+      'border-radius:14px;padding:1.6rem 1.5rem;width:min(440px,92vw);' +
+      'z-index:140;display:none;font-family:Orbitron,sans-serif;color:#fff;' +
+      'box-shadow:0 0 40px rgba(0,180,255,.4)';
+    panel.innerHTML =
+      '<div id="tut-step" style="font-size:.62rem;color:#7a8ba0;letter-spacing:.18em">STEP 1 / 8</div>' +
+      '<div id="tut-title" style="font-size:1.4rem;font-weight:900;margin:.4rem 0;color:#00b4ff">WELCOME</div>' +
+      '<div id="tut-body" style="font-size:.84rem;line-height:1.6;color:#cdd9e6;margin-bottom:1.1rem">…</div>' +
+      '<div style="display:flex;gap:.55rem">' +
+        '<button id="tut-skip" class="gbtn" style="flex:1">SKIP</button>' +
+        '<button id="tut-next" class="abtn" style="flex:2">NEXT ▶</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('tut-skip').onclick = function(){ AudioSys.click(); stop(); };
+    document.getElementById('tut-next').onclick = function(){ AudioSys.click(); next(); };
+  }
+  function start(){
+    if (!panel) build();
+    active = true;
+    stepIdx = 0;
+    show();
+  }
+  function stop(){
+    active = false;
+    if (panel) panel.style.display = 'none';
+    try { localStorage.setItem('spike_tennis_tutorial_done','1'); } catch(_){}
+  }
+  function next(){
+    stepIdx++;
+    if (stepIdx >= steps.length){ stop(); return; }
+    show();
+  }
+  function show(){
+    if (!panel) build();
+    const s = steps[stepIdx];
+    document.getElementById('tut-step').textContent = 'STEP ' + (stepIdx + 1) + ' / ' + steps.length;
+    document.getElementById('tut-title').textContent = s.title;
+    document.getElementById('tut-body').textContent = s.body;
+    panel.style.display = 'block';
+    stepTimer = s.wait;
+  }
+  function update(dt){
+    if (!active) return;
+    stepTimer -= dt;
+    // Auto-advance disabled by default; user clicks Next.
+  }
+  function shouldAutoStart(){
+    try { return !localStorage.getItem('spike_tennis_tutorial_done'); }
+    catch(_){ return true; }
+  }
+  return {
+    start: start, stop: stop, next: next, update: update,
+    shouldAutoStart: shouldAutoStart,
+    isActive: function(){ return active; }
+  };
+})();
+
+// ── Music system (procedural lobby + match background tracks) ──────
+const Music = (function(){
+  let ac = null;
+  let masterGain = null;
+  let activeOscillators = [];
+  let active = false;
+  let mode = 'silent';
+  let nextNoteTime = 0;
+  let beat = 0;
+  // Pentatonic minor scale offsets (for that "video gamey" feel)
+  const scale = [0, 3, 5, 7, 10, 12, 15, 17];
+  const baseFreq = 110; // A2
+  function freqFor(n){ return baseFreq * Math.pow(2, scale[n % scale.length] / 12 + Math.floor(n/scale.length)); }
+  function init(){
+    if (ac) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      ac = new Ctx();
+      masterGain = ac.createGain();
+      masterGain.gain.value = 0.06;  // Quiet background
+      masterGain.connect(ac.destination);
+    } catch(_){}
+  }
+  function setVolume(v){
+    if (masterGain) masterGain.gain.value = v;
+  }
+  function setMode(m){
+    mode = m;
+    if (m === 'silent'){
+      stop();
+    } else {
+      start();
+    }
+  }
+  function tick(){
+    if (!active || !ac) return;
+    const now = ac.currentTime;
+    while (nextNoteTime < now + 0.25){
+      scheduleNote(nextNoteTime);
+      nextNoteTime += 0.5;
+    }
+  }
+  function scheduleNote(t){
+    if (!ac || !active) return;
+    const noteIdx = patternForMode()[beat % patternForMode().length];
+    if (noteIdx >= 0){
+      const f = freqFor(noteIdx);
+      const osc = ac.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = f;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.07, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      osc.connect(g); g.connect(masterGain);
+      osc.start(t); osc.stop(t + 0.42);
+      activeOscillators.push(osc);
+      if (activeOscillators.length > 32) activeOscillators.shift();
+    }
+    // Also play a bass note every 4 beats
+    if (beat % 4 === 0){
+      const bassF = baseFreq * 0.5;
+      const bo = ac.createOscillator();
+      bo.type = 'square';
+      bo.frequency.value = bassF;
+      const bg = ac.createGain();
+      bg.gain.setValueAtTime(0, t);
+      bg.gain.linearRampToValueAtTime(0.04, t + 0.02);
+      bg.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      bo.connect(bg); bg.connect(masterGain);
+      bo.start(t); bo.stop(t + 0.42);
+      activeOscillators.push(bo);
+    }
+    beat++;
+  }
+  function patternForMode(){
+    // -1 = rest. Modes have different patterns.
+    if (mode === 'lobby') return [0, -1, 2, -1, 4, -1, 2, -1, 0, -1, 2, -1, 4, 5, 4, 2];
+    if (mode === 'match') return [0, 3, 5, 3, 0, 3, 5, 7, 5, 3, 5, 3, 0, 2, 0, -1];
+    if (mode === 'tense') return [0, -1, 0, 2, 0, -1, 0, 2, 3, -1, 3, 5, 3, -1, 3, 2];
+    if (mode === 'victory') return [0, 4, 7, 12, 7, 4, 0, -1, 7, 12, 14, 12, 7, 4, 0, -1];
+    return [0, -1, -1, -1];
+  }
+  function start(){
+    init();
+    if (!ac) return;
+    if (active) return;
+    active = true;
+    nextNoteTime = ac.currentTime + 0.05;
+    beat = 0;
+    function loop(){
+      if (!active) return;
+      tick();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  }
+  function stop(){
+    active = false;
+    activeOscillators.forEach(function(o){
+      try { o.stop(); } catch(_){}
+    });
+    activeOscillators = [];
+  }
+  return {
+    init: init, start: start, stop: stop,
+    setMode: setMode, setVolume: setVolume
+  };
+})();
+
+// ── Practice Mini-Games ────────────────────────────────
+// Multiple variants of practice modes: target shooting, rally drill,
+// volley drill, return drill, accuracy drill, speed drill.
+const MiniGames = (function(){
+  const config = {
+    target: {
+      name: 'Target Shooting',
+      desc: 'Hit the rings to score points',
+      duration: 60,
+      ballsPerSecond: 0.4,
+      targets: 3,
+      pointsPerHit: 50,
+    },
+    rally: {
+      name: 'Rally Drill',
+      desc: 'Keep the rally going as long as possible',
+      duration: 0,    // unlimited
+      ballsPerSecond: 0,
+      targets: 0,
+      pointsPerHit: 1, // 1 per shot
+    },
+    volley: {
+      name: 'Volley Drill',
+      desc: 'Hit balls before they bounce',
+      duration: 90,
+      ballsPerSecond: 0.5,
+      targets: 0,
+      pointsPerHit: 25,
+    },
+    return: {
+      name: 'Return Drill',
+      desc: 'Return power serves',
+      duration: 90,
+      ballsPerSecond: 0.3,
+      targets: 0,
+      pointsPerHit: 30,
+    },
+    accuracy: {
+      name: 'Accuracy Drill',
+      desc: 'Hit specific zones for bonus',
+      duration: 120,
+      ballsPerSecond: 0.4,
+      targets: 5,
+      pointsPerHit: 60,
+    },
+    speed: {
+      name: 'Speed Test',
+      desc: 'Hit fastest serve possible',
+      duration: 60,
+      ballsPerSecond: 0,
+      targets: 0,
+      pointsPerHit: 0,
+    },
+  };
+  let activeName = null;
+  let cfg = null;
+  let elapsed = 0;
+  let score = 0;
+  let combo = 0;
+  let bestScores = {};
+  function loadBests(){
+    try {
+      const raw = localStorage.getItem('spike_tennis_minigame_bests_v1');
+      if (raw) bestScores = JSON.parse(raw);
+    } catch(_){}
+  }
+  function saveBests(){
+    try { localStorage.setItem('spike_tennis_minigame_bests_v1', JSON.stringify(bestScores)); } catch(_){}
+  }
+  function start(name){
+    cfg = config[name];
+    if (!cfg){ return; }
+    activeName = name;
+    elapsed = 0; score = 0; combo = 0;
+    showMsg(cfg.name.toUpperCase() + ' — ' + cfg.desc, 1800);
+  }
+  function stop(){
+    if (!activeName) return;
+    if (!bestScores[activeName] || score > bestScores[activeName]){
+      bestScores[activeName] = score;
+      saveBests();
+      Profile.recordPracticeScore(score);
+      showMsg('🏆 NEW BEST: ' + score + ' (' + cfg.name + ')', 3500);
+    } else {
+      showMsg('FINAL: ' + score + ' (Best: ' + (bestScores[activeName] || 0) + ')', 3500);
+    }
+    activeName = null;
+    cfg = null;
+  }
+  function update(dt){
+    if (!activeName || !cfg) return;
+    elapsed += dt;
+    if (cfg.duration > 0 && elapsed >= cfg.duration){
+      stop();
+    }
+  }
+  function isActive(){ return activeName !== null; }
+  function getCurrent(){ return { name: activeName, cfg: cfg, score: score, elapsed: elapsed }; }
+  function getBest(name){ return bestScores[name] || 0; }
+  function getAllBests(){ return Object.assign({}, bestScores); }
+  function addScore(amount){ score += amount; }
+  function comboHit(){
+    combo++;
+    if (combo >= 5) showMsg('🔥 COMBO ×' + combo, 800);
+    return combo;
+  }
+  function resetCombo(){ combo = 0; }
+  function getScore(){ return score; }
+  function getElapsed(){ return elapsed; }
+  function getRemaining(){ return cfg ? Math.max(0, cfg.duration - elapsed) : 0; }
+  loadBests();
+  return {
+    start: start, stop: stop, update: update,
+    isActive: isActive, getCurrent: getCurrent,
+    getBest: getBest, getAllBests: getAllBests,
+    addScore: addScore, comboHit: comboHit, resetCombo: resetCombo,
+    getScore: getScore, getElapsed: getElapsed, getRemaining: getRemaining,
+    config: config,
+  };
+})();
+
+// ── Shop / Customization (cosmetic items unlocked via XP / level) ──
+const Shop = (function(){
+  const items = [
+    // Rackets (visual variants)
+    { id:'racket_classic',  type:'racket',  name:'Classic Racket', cost:0,    levelReq:1, color:0xff5050 },
+    { id:'racket_neon',     type:'racket',  name:'Neon Racket',    cost:200,  levelReq:2, color:0x00b4ff },
+    { id:'racket_gold',     type:'racket',  name:'Gold Racket',    cost:1000, levelReq:5, color:0xffd700 },
+    { id:'racket_chrome',   type:'racket',  name:'Chrome Racket',  cost:2000, levelReq:8, color:0xeeeeee },
+    { id:'racket_lava',     type:'racket',  name:'Lava Racket',    cost:3000, levelReq:10, color:0xff3010 },
+    { id:'racket_glacier',  type:'racket',  name:'Glacier Racket', cost:3500, levelReq:11, color:0x80ffff },
+    // Balls (visual + physics-feel)
+    { id:'ball_standard',   type:'ball',    name:'Standard',       cost:0,    levelReq:1, color:0xb2ff14 },
+    { id:'ball_fire',       type:'ball',    name:'Fire Ball',      cost:500,  levelReq:3, color:0xff5510 },
+    { id:'ball_ice',        type:'ball',    name:'Ice Ball',       cost:500,  levelReq:3, color:0x90e0ff },
+    { id:'ball_disco',      type:'ball',    name:'Disco Ball',     cost:1500, levelReq:6, color:0xff80ff },
+    { id:'ball_galaxy',     type:'ball',    name:'Galaxy Ball',    cost:5000, levelReq:12, color:0xa0a0ff },
+    // Trails
+    { id:'trail_default',   type:'trail',   name:'Standard Trail', cost:0,    levelReq:1, },
+    { id:'trail_rainbow',   type:'trail',   name:'Rainbow Trail',  cost:800,  levelReq:4, },
+    { id:'trail_smoke',     type:'trail',   name:'Smoke Trail',    cost:1200, levelReq:6, },
+    { id:'trail_lightning', type:'trail',   name:'Lightning Trail',cost:2500, levelReq:9, },
+    { id:'trail_petals',    type:'trail',   name:'Petals Trail',   cost:4000, levelReq:11, },
+    // Hats / accessories
+    { id:'hat_none',        type:'hat',     name:'No Hat',         cost:0,    levelReq:1, },
+    { id:'hat_cap',         type:'hat',     name:'Cap',            cost:300,  levelReq:2, },
+    { id:'hat_visor',       type:'hat',     name:'Visor',          cost:600,  levelReq:3, },
+    { id:'hat_crown',       type:'hat',     name:'Crown',          cost:5000, levelReq:12, },
+    { id:'hat_wizard',      type:'hat',     name:'Wizard Hat',     cost:3500, levelReq:10, },
+    // Court banners / themes already unlock via level
+    { id:'banner_red',      type:'banner',  name:'Red Banner',     cost:200,  levelReq:2, },
+    { id:'banner_blue',     type:'banner',  name:'Blue Banner',    cost:200,  levelReq:2, },
+    { id:'banner_gold',     type:'banner',  name:'Gold Banner',    cost:1500, levelReq:7, },
+    // Emotes (used during point-end celebrations)
+    { id:'emote_wave',      type:'emote',   name:'Wave',           cost:100,  levelReq:1, },
+    { id:'emote_pump',      type:'emote',   name:'Fist Pump',      cost:300,  levelReq:2, },
+    { id:'emote_bow',       type:'emote',   name:'Bow',            cost:600,  levelReq:4, },
+    { id:'emote_dance',     type:'emote',   name:'Victory Dance',  cost:1500, levelReq:7, },
+    { id:'emote_celebrate', type:'emote',   name:'Big Celebration',cost:3000, levelReq:10, },
+  ];
+  const DATA_KEY = 'spike_tennis_shop_v1';
+  const data = {
+    coins: 0,
+    owned: ['racket_classic','ball_standard','trail_default','hat_none','emote_wave'],
+    equipped: {
+      racket: 'racket_classic',
+      ball: 'ball_standard',
+      trail: 'trail_default',
+      hat: 'hat_none',
+      emote: 'emote_wave',
+    }
+  };
+  function load(){
+    try {
+      const raw = localStorage.getItem(DATA_KEY);
+      if (raw){
+        const p = JSON.parse(raw);
+        if (p.coins != null) data.coins = p.coins;
+        if (p.owned)         data.owned = p.owned;
+        if (p.equipped)      Object.assign(data.equipped, p.equipped);
+      }
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(DATA_KEY, JSON.stringify(data)); } catch(_){}
+  }
+  function addCoins(n){ data.coins += n; save(); }
+  function spendCoins(n){
+    if (data.coins < n) return false;
+    data.coins -= n; save();
+    return true;
+  }
+  function isOwned(id){ return data.owned.indexOf(id) >= 0; }
+  function isEquipped(id){
+    const item = items.find(function(i){ return i.id === id; });
+    if (!item) return false;
+    return data.equipped[item.type] === id;
+  }
+  function buy(id){
+    const item = items.find(function(i){ return i.id === id; });
+    if (!item) return { ok:false, reason:'Unknown item' };
+    if (Profile.data.level < item.levelReq) return { ok:false, reason:'Need level ' + item.levelReq };
+    if (isOwned(id)) return { ok:false, reason:'Already owned' };
+    if (data.coins < item.cost) return { ok:false, reason:'Not enough coins' };
+    data.coins -= item.cost;
+    data.owned.push(id);
+    save();
+    return { ok:true, item: item };
+  }
+  function equip(id){
+    const item = items.find(function(i){ return i.id === id; });
+    if (!item || !isOwned(id)) return false;
+    data.equipped[item.type] = id;
+    save();
+    return true;
+  }
+  function getOwnedOfType(type){
+    return items.filter(function(i){ return i.type === type && isOwned(i.id); });
+  }
+  function getAll(){ return items.slice(); }
+  function getEquipped(type){ return data.equipped[type]; }
+  function getEquippedItem(type){
+    return items.find(function(i){ return i.id === data.equipped[type]; });
+  }
+  function getCoins(){ return data.coins; }
+  load();
+  return {
+    items: items, data: data,
+    load: load, save: save,
+    addCoins: addCoins, spendCoins: spendCoins,
+    isOwned: isOwned, isEquipped: isEquipped,
+    buy: buy, equip: equip,
+    getOwnedOfType: getOwnedOfType,
+    getAll: getAll,
+    getEquipped: getEquipped,
+    getEquippedItem: getEquippedItem,
+    getCoins: getCoins,
+  };
+})();
+
+// ── Weather / Lighting Effects ─────────────────────────
+const Weather = (function(){
+  let mode = 'clear';
+  let rainParticles = [];
+  const RAIN_COUNT = 200;
+  let snowParticles = [];
+  const SNOW_COUNT = 80;
+  let fogIntensity = 0.018;
+  let initialized = false;
+
+  function initRain(){
+    if (rainParticles.length) return;
+    const geo = new THREE.CylinderGeometry(0.01, 0.01, 0.4, 4);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xaaccee, transparent: true, opacity: 0.5 });
+    for (let i=0; i<RAIN_COUNT; i++){
+      const drop = new THREE.Mesh(geo, mat);
+      drop.position.set(
+        (Math.random() - 0.5) * 60,
+        Math.random() * 25 + 5,
+        (Math.random() - 0.5) * 60
+      );
+      drop.visible = false;
+      scene.add(drop);
+      rainParticles.push({ mesh: drop, vy: -10 - Math.random() * 4 });
+    }
+  }
+  function initSnow(){
+    if (snowParticles.length) return;
+    const geo = new THREE.SphereGeometry(0.07, 6, 6);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+    for (let i=0; i<SNOW_COUNT; i++){
+      const flake = new THREE.Mesh(geo, mat);
+      flake.position.set(
+        (Math.random() - 0.5) * 60,
+        Math.random() * 25 + 5,
+        (Math.random() - 0.5) * 60
+      );
+      flake.visible = false;
+      scene.add(flake);
+      snowParticles.push({ mesh: flake, vy: -1.5 - Math.random() * 0.5, vx: (Math.random()-0.5)*0.5, age: Math.random()*5 });
+    }
+  }
+  function setMode(m){
+    mode = m;
+    rainParticles.forEach(function(p){ p.mesh.visible = (m === 'rain'); });
+    snowParticles.forEach(function(p){ p.mesh.visible = (m === 'snow'); });
+    if (scene.fog){
+      const f = m === 'fog' ? 0.04 : m === 'rain' ? 0.025 : m === 'snow' ? 0.022 : 0.018;
+      scene.fog.density = f;
+      fogIntensity = f;
+    }
+    if (m === 'rain' && !initialized){ initRain(); initialized = true; }
+    if (m === 'snow') initSnow();
+  }
+  function update(dt){
+    if (mode === 'rain'){
+      rainParticles.forEach(function(p){
+        if (!p.mesh.visible) return;
+        p.mesh.position.y += p.vy * dt;
+        if (p.mesh.position.y < 0){
+          p.mesh.position.set(
+            (Math.random() - 0.5) * 60,
+            20 + Math.random() * 5,
+            (Math.random() - 0.5) * 60
+          );
+        }
+      });
+    }
+    if (mode === 'snow'){
+      snowParticles.forEach(function(p){
+        if (!p.mesh.visible) return;
+        p.age += dt;
+        p.mesh.position.x += p.vx * dt + Math.sin(p.age * 1.5) * 0.02;
+        p.mesh.position.y += p.vy * dt;
+        if (p.mesh.position.y < 0){
+          p.mesh.position.set(
+            (Math.random() - 0.5) * 60,
+            20 + Math.random() * 5,
+            (Math.random() - 0.5) * 60
+          );
+        }
+      });
+    }
+  }
+  function getMode(){ return mode; }
+  return { setMode: setMode, update: update, getMode: getMode };
+})();
+
+// ── Multi-ball chaos mode ──────────────────────────────
+const MultiBall = (function(){
+  const extraBalls = []; // { mesh, pos, vel, active }
+  const MAX = 4;
+  let enabled = false;
+
+  function init(){
+    if (extraBalls.length) return;
+    const geo = new THREE.SphereGeometry(0.18, 14, 14);
+    for (let i=0; i<MAX; i++){
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xff80aa, emissive: 0xaa3050, emissiveIntensity: 0.7
+      });
+      const m = new THREE.Mesh(geo, mat);
+      m.castShadow = true;
+      m.visible = false;
+      scene.add(m);
+      extraBalls.push({
+        mesh: m,
+        pos: new THREE.Vector3(),
+        vel: new THREE.Vector3(),
+        active: false,
+      });
+    }
+  }
+  function setEnabled(on){
+    enabled = !!on;
+    if (!on){
+      extraBalls.forEach(function(b){ b.active = false; b.mesh.visible = false; });
+    }
+  }
+  function spawnFrom(x, y, z, vx, vy, vz){
+    if (!enabled) return;
+    init();
+    const free = extraBalls.find(function(b){ return !b.active; });
+    if (!free) return;
+    free.pos.set(x, y, z);
+    free.vel.set(vx, vy, vz);
+    free.active = true;
+    free.mesh.visible = true;
+    free.mesh.position.copy(free.pos);
+  }
+  function update(dt){
+    if (!enabled) return;
+    extraBalls.forEach(function(b){
+      if (!b.active) return;
+      b.vel.y -= 16 * dt;
+      b.pos.addScaledVector(b.vel, dt);
+      if (b.pos.y <= 0.18){
+        b.pos.y = 0.18;
+        if (Math.abs(b.vel.y) > 0.4){
+          b.vel.y = Math.abs(b.vel.y) * 0.55;
+          b.vel.x *= 0.84; b.vel.z *= 0.84;
+        } else {
+          b.vel.y = 0; b.active = false; b.mesh.visible = false;
+        }
+      }
+      // Cap height
+      if (b.pos.y > 3.0){
+        b.pos.y = 3.0;
+        if (b.vel.y > 0) b.vel.y = -Math.abs(b.vel.y) * 0.3;
+      }
+      b.mesh.position.copy(b.pos);
+      // Despawn if far off court
+      if (Math.abs(b.pos.x) > 30 || Math.abs(b.pos.z) > 30){
+        b.active = false; b.mesh.visible = false;
+      }
+    });
+  }
+  function getCount(){ return extraBalls.filter(function(b){ return b.active; }).length; }
+  return { setEnabled: setEnabled, spawnFrom: spawnFrom, update: update, init: init, getCount: getCount };
+})();
+
+// ── Trophies / Trophy room ─────────────────────────────
+const Trophies = (function(){
+  const TROPHY_KEY = 'spike_tennis_trophies_v1';
+  const data = { earned: [] };
+  const trophies = [
+    { id:'first_win',       name:'First Victory',     desc:'Win your first match',           icon:'🥉' },
+    { id:'win_10',          name:'10 Wins',           desc:'Win 10 matches',                 icon:'🥈' },
+    { id:'win_50',          name:'Half Century',      desc:'Win 50 matches',                 icon:'🥇' },
+    { id:'win_100',         name:'Century',           desc:'Win 100 matches',                icon:'🏆' },
+    { id:'tournament',      name:'Tournament Champ',  desc:'Win the tournament',             icon:'👑' },
+    { id:'tournament_3',    name:'3-Time Champ',      desc:'Win tournament 3 times',         icon:'👑' },
+    { id:'level_5',         name:'Rising Star',       desc:'Reach level 5',                  icon:'⭐' },
+    { id:'level_10',        name:'Veteran',           desc:'Reach level 10',                 icon:'🌟' },
+    { id:'level_20',        name:'Legend',            desc:'Reach level 20',                 icon:'💫' },
+    { id:'speed_220',       name:'Speed Demon',       desc:'220+ km/h serve',                icon:'⚡' },
+    { id:'speed_250',       name:'Sound Barrier',     desc:'250+ km/h serve',                icon:'🚀' },
+    { id:'rally_15',        name:'Rally Master',      desc:'15-shot rally',                  icon:'🎯' },
+    { id:'rally_30',        name:'Marathon Rally',    desc:'30-shot rally',                  icon:'🎯' },
+    { id:'no_errors',       name:'Flawless',          desc:'Win match with 0 unforced',      icon:'💎' },
+    { id:'all_courts',      name:'Globetrotter',      desc:'Win on every court type',        icon:'🌍' },
+    { id:'comeback',        name:'Comeback King',     desc:'Win match from 0-2 sets',        icon:'💪' },
+    { id:'aces_10_match',   name:'Ace Maker',         desc:'10 aces in one match',           icon:'🎯' },
+    { id:'smashes_5_match', name:'Hammer Time',       desc:'5 smashes in one match',         icon:'🔨' },
+    { id:'practice_500',    name:'Practice Hero',     desc:'500 in any practice mode',       icon:'🏋' },
+    { id:'practice_1000',   name:'Drill Sergeant',    desc:'1000 in any practice mode',      icon:'🏋' },
+  ];
+  function load(){
+    try {
+      const raw = localStorage.getItem(TROPHY_KEY);
+      if (raw){ data.earned = (JSON.parse(raw).earned) || []; }
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(TROPHY_KEY, JSON.stringify(data)); } catch(_){}
+  }
+  function award(id){
+    if (data.earned.indexOf(id) >= 0) return false;
+    data.earned.push(id);
+    save();
+    const t = trophies.find(function(x){ return x.id === id; });
+    if (t){
+      showMsg(t.icon + ' TROPHY: ' + t.name, 3500);
+      AudioSys.fanfare();
+    }
+    return true;
+  }
+  function check(){
+    if (Profile.data.totalWins >= 1)   award('first_win');
+    if (Profile.data.totalWins >= 10)  award('win_10');
+    if (Profile.data.totalWins >= 50)  award('win_50');
+    if (Profile.data.totalWins >= 100) award('win_100');
+    if (Profile.data.tournamentWins >= 1) award('tournament');
+    if (Profile.data.tournamentWins >= 3) award('tournament_3');
+    if (Profile.data.level >= 5)  award('level_5');
+    if (Profile.data.level >= 10) award('level_10');
+    if (Profile.data.level >= 20) award('level_20');
+    if (Profile.data.fastestServe >= 220) award('speed_220');
+    if (Profile.data.fastestServe >= 250) award('speed_250');
+    if (Profile.data.bestRally >= 15) award('rally_15');
+    if (Profile.data.bestRally >= 30) award('rally_30');
+    if (Profile.data.practiceBest >= 500)  award('practice_500');
+    if (Profile.data.practiceBest >= 1000) award('practice_1000');
+  }
+  function getAll(){ return trophies.slice(); }
+  function isEarned(id){ return data.earned.indexOf(id) >= 0; }
+  load();
+  return { trophies: trophies, data: data, award: award, check: check, getAll: getAll, isEarned: isEarned };
+})();
+
+// ── Animation expansions: idle, victory, taunt sequences ──
+const AnimSys = (function(){
+  // Each player can be in one of: idle, walk, swing, jump, victory, taunt
+  // We don't have a real animation system, but we can drive arm/leg rotations
+  // procedurally for different states.
+  const states = {};
+  function setState(pi, stateName){ states[pi] = { name: stateName, t: 0 }; }
+  function update(dt){
+    for (const pi in states){
+      const s = states[pi];
+      if (!s) continue;
+      s.t += dt;
+      const c = chars[pi];
+      if (!c || !c.group) continue;
+      if (s.name === 'victory'){
+        // Arms up, slight bounce
+        if (c.armL) c.armL.rotation.x = -2.0;
+        if (c.armR) c.armR.rotation.x = -2.0;
+        const bounce = Math.abs(Math.sin(s.t * 6)) * 0.15;
+        c.group.position.y = bounce;
+        if (s.t > 3) setState(pi, 'idle');
+      } else if (s.name === 'taunt'){
+        // One arm raised, swaying
+        if (c.armR) c.armR.rotation.x = -1.8 + Math.sin(s.t * 4) * 0.3;
+        if (c.armL) c.armL.rotation.x = 0.0;
+        if (s.t > 2.5) setState(pi, 'idle');
+      } else if (s.name === 'jump'){
+        // Tucked legs is handled by syncCharVisuals already
+      }
+    }
+  }
+  function getState(pi){
+    return (states[pi] && states[pi].name) || 'idle';
+  }
+  return { setState: setState, update: update, getState: getState };
+})();
+
+// ── Detailed Shot History (records every shot for analysis) ────
+const ShotHistory = (function(){
+  const records = [];
+  const MAX = 200;
+  function record(shot){
+    // shot = { pi, type, speed, arcH, fromX, fromZ, toX, toZ, time, success }
+    records.push(Object.assign({ time: performance.now() }, shot));
+    if (records.length > MAX) records.shift();
+  }
+  function getAll(){ return records.slice(); }
+  function clear(){ records.length = 0; }
+  function getStats(){
+    const stats = { byType:{}, byPlayer:[{count:0, avgSpeed:0, errors:0}, {count:0, avgSpeed:0, errors:0}] };
+    let totalSpeed = [0, 0], totalCount = [0, 0];
+    for (let i=0; i<records.length; i++){
+      const r = records[i];
+      stats.byType[r.type] = (stats.byType[r.type] || 0) + 1;
+      stats.byPlayer[r.pi].count++;
+      totalSpeed[r.pi] += r.speed || 0;
+      totalCount[r.pi]++;
+      if (r.success === false) stats.byPlayer[r.pi].errors++;
+    }
+    for (let p=0; p<2; p++){
+      stats.byPlayer[p].avgSpeed = totalCount[p] > 0 ? totalSpeed[p] / totalCount[p] : 0;
+    }
+    return stats;
+  }
+  function getHeatmap(player){
+    // Returns 2D grid (10x10) of shot landings normalized by court
+    const grid = [];
+    for (let y=0; y<10; y++){
+      const row = [];
+      for (let x=0; x<10; x++) row.push(0);
+      grid.push(row);
+    }
+    for (let i=0; i<records.length; i++){
+      const r = records[i];
+      if (r.pi !== player) continue;
+      const gx = Math.floor((r.toX + CHW) / (2*CHW) * 10);
+      const gy = Math.floor((r.toZ + CHL) / (2*CHL) * 10);
+      if (gx >= 0 && gx < 10 && gy >= 0 && gy < 10) grid[gy][gx]++;
+    }
+    return grid;
+  }
+  return { record: record, getAll: getAll, clear: clear, getStats: getStats, getHeatmap: getHeatmap };
+})();
+
+// ── Player Skill Ratings (per-mechanic skill trees, used by AI) ───
+const SkillSystem = (function(){
+  const KEY = 'spike_tennis_skills_v1';
+  const skills = {
+    serveAccuracy: { level: 1, xp: 0, max: 10, name: 'Serve Accuracy', desc: 'Improves serve placement' },
+    servePower:    { level: 1, xp: 0, max: 10, name: 'Serve Power',    desc: 'Increases serve speed' },
+    forehand:      { level: 1, xp: 0, max: 10, name: 'Forehand',       desc: 'Power on forehand shots' },
+    backhand:      { level: 1, xp: 0, max: 10, name: 'Backhand',       desc: 'Power on backhand shots' },
+    volley:        { level: 1, xp: 0, max: 10, name: 'Volley',         desc: 'Improves net play' },
+    smash:         { level: 1, xp: 0, max: 10, name: 'Smash',          desc: 'Smash power and accuracy' },
+    speed:         { level: 1, xp: 0, max: 10, name: 'Movement Speed', desc: 'Run faster on court' },
+    stamina:       { level: 1, xp: 0, max: 10, name: 'Stamina',        desc: 'Less fatigue over rallies' },
+    return:        { level: 1, xp: 0, max: 10, name: 'Return',         desc: 'Better serve returns' },
+    spin:          { level: 1, xp: 0, max: 10, name: 'Spin Mastery',   desc: 'More effective top/back spin' },
+  };
+  function load(){
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw){
+        const p = JSON.parse(raw);
+        for (const k in skills){
+          if (p[k]){
+            skills[k].level = p[k].level || 1;
+            skills[k].xp = p[k].xp || 0;
+          }
+        }
+      }
+    } catch(_){}
+  }
+  function save(){
+    try {
+      const out = {};
+      for (const k in skills){ out[k] = { level: skills[k].level, xp: skills[k].xp }; }
+      localStorage.setItem(KEY, JSON.stringify(out));
+    } catch(_){}
+  }
+  function gainXP(skill, amount){
+    if (!skills[skill]) return;
+    skills[skill].xp += amount;
+    const needed = xpForLevel(skills[skill].level + 1);
+    if (skills[skill].xp >= needed && skills[skill].level < skills[skill].max){
+      skills[skill].level++;
+      showMsg('📈 ' + skills[skill].name + ' → Lvl ' + skills[skill].level, 2200);
+      save();
+    } else {
+      save();
+    }
+  }
+  function xpForLevel(lvl){ return Math.floor(20 * lvl * lvl); }
+  function getMultiplier(skill){
+    return 1 + (skills[skill].level - 1) * 0.07;  // 1.0 → 1.63 at max
+  }
+  function get(skill){ return skills[skill]; }
+  function getAll(){ return Object.assign({}, skills); }
+  function reset(){
+    for (const k in skills){
+      skills[k].level = 1; skills[k].xp = 0;
+    }
+    save();
+  }
+  load();
+  return { skills: skills, gainXP: gainXP, get: get, getAll: getAll, reset: reset, save: save, xpForLevel: xpForLevel, getMultiplier: getMultiplier };
+})();
+
+// ── Match commentary panel (shows historical events) ─────
+const MatchLog = (function(){
+  const entries = [];  // { time, text, type }
+  function add(text, type){
+    entries.push({ time: performance.now(), text: text, type: type || 'info' });
+    if (entries.length > 50) entries.shift();
+  }
+  function getRecent(n){
+    n = n || 10;
+    return entries.slice(-n);
+  }
+  function clear(){ entries.length = 0; }
+  return { add: add, getRecent: getRecent, clear: clear, entries: entries };
+})();
+
+// ── Detailed audio expansion: many more synth sounds ──────
+const AudioFX = (function(){
+  // Wraps AudioSys with extra named effects synthesized on the fly.
+  function getCtx(){
+    AudioSys.init();
+    return null; // We delegate to AudioSys's internal context
+  }
+  function buzzer(){
+    // Out-of-bounds buzzer
+    AudioSys.init();
+    AudioSys.ensureRunning();
+    if (AudioSys.isMuted()) return;
+    // Use a low-pitched square wave
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ac = new Ctx();
+    const osc = ac.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = 180;
+    const g = ac.createGain();
+    g.gain.value = 0;
+    g.gain.linearRampToValueAtTime(0.18, ac.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.4);
+    osc.connect(g); g.connect(ac.destination);
+    osc.start(); osc.stop(ac.currentTime + 0.42);
+  }
+  // Match-start chime (pleasant ascending)
+  function chime(){
+    AudioSys.init();
+    AudioSys.ensureRunning();
+    if (AudioSys.isMuted()) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ac = new Ctx();
+    const notes = [392, 523, 659, 784];
+    notes.forEach(function(f, i){
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      const g = ac.createGain();
+      const t = ac.currentTime + i * 0.12;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.08, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.30);
+      osc.connect(g); g.connect(ac.destination);
+      osc.start(t); osc.stop(t + 0.32);
+    });
+  }
+  return { buzzer: buzzer, chime: chime };
+})();
+
+// ── Effects pipeline: chain of post-render effects ────────
+const EffectsPipeline = (function(){
+  // We don't have actual postprocessing without EffectComposer, but we can
+  // simulate flash by toggling renderer.toneMappingExposure briefly.
+  let flashTime = 0;
+  let flashStrength = 0;
+  function flash(strength){
+    flashStrength = strength || 0.4;
+    flashTime = 0.4;
+  }
+  function update(dt){
+    if (flashTime > 0){
+      flashTime -= dt;
+      const t = Math.max(0, flashTime / 0.4);
+      renderer.toneMappingExposure = 1.25 + flashStrength * t;
+    } else {
+      renderer.toneMappingExposure = 1.25;
+    }
+  }
+  let camShakeTime = 0, camShakeMag = 0;
+  function shake(magnitude, duration){
+    camShakeMag = magnitude;
+    camShakeTime = duration || 0.4;
+  }
+  function applyShake(){
+    if (camShakeTime <= 0) return;
+    const m = camShakeMag * (camShakeTime / 0.4);
+    camera.position.x += (Math.random() - 0.5) * m;
+    camera.position.y += (Math.random() - 0.5) * m;
+  }
+  function decayShake(dt){
+    if (camShakeTime > 0) camShakeTime -= dt;
+  }
+  return { flash: flash, update: update, shake: shake, applyShake: applyShake, decayShake: decayShake };
+})();
+
+// ── Court venues (different stadium decorations per court type) ───
+const Venues = {
+  hard: {
+    name: 'Centre Court',
+    flagColors: [0x00b4ff, 0xffffff, 0xffdd33],
+    crowdMix: [0xff5050, 0x00b4ff, 0xb2ff14, 0xa050ff, 0xffdc32],
+    skyColor: 0x070b18,
+    music: 'match',
+  },
+  clay: {
+    name: 'Roland Mock',
+    flagColors: [0xb04a30, 0xffffff, 0xffae40],
+    crowdMix: [0xffae40, 0xb04a30, 0xffffff, 0x886633],
+    skyColor: 0x150a08,
+    music: 'tense',
+  },
+  grass: {
+    name: 'The Lawn',
+    flagColors: [0xa0ff60, 0xffffff, 0x008833],
+    crowdMix: [0xffffff, 0x008833, 0xa0ff60, 0x884400],
+    skyColor: 0x051010,
+    music: 'lobby',
+  },
+  night: {
+    name: 'Neon Arena',
+    flagColors: [0xff40ff, 0x00b4ff, 0xa050ff],
+    crowdMix: [0xff40ff, 0x00b4ff, 0xa050ff, 0xb2ff14, 0xffdd33],
+    skyColor: 0x000004,
+    music: 'tense',
+  },
+};
+function getCurrentVenue(){
+  return Venues[activeTheme] || Venues.hard;
+}
+
+// ── Coin earnings: award based on match/practice performance ──
+function awardCoinsForMatch(won, gameDiff){
+  let coins = 50;
+  if (won) coins += 100;
+  if (gameDiff === 'hard') coins *= 2;
+  else if (gameDiff === 'medium') coins *= 1.5;
+  Shop.addCoins(Math.floor(coins));
+  showMsg('+ ' + Math.floor(coins) + ' coins', 1200);
+}
+function awardCoinsForPractice(score){
+  const coins = Math.floor(score / 5);
+  if (coins > 0){
+    Shop.addCoins(coins);
+    showMsg('+ ' + coins + ' coins', 1200);
+  }
+}
+
+// ── Loading screen / splash ───────────────────────────
+const Splash = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'splash';
+    panel.style.cssText =
+      'position:fixed;inset:0;background:linear-gradient(135deg,#000,#0a1428,#1a0838);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'z-index:300;font-family:Orbitron,sans-serif;color:#fff';
+    panel.innerHTML =
+      '<div style="font-size:clamp(2.5rem,7vw,5rem);font-weight:900;' +
+      'background:linear-gradient(135deg,#fff,#00b4ff,#b2ff14);' +
+      '-webkit-background-clip:text;-webkit-text-fill-color:transparent;' +
+      'background-clip:text;letter-spacing:.08em;margin-bottom:1rem">' +
+      'SPIKE TENNIS</div>' +
+      '<div style="font-size:.78rem;color:#637490;letter-spacing:.18em">LOADING…</div>' +
+      '<div style="margin-top:2rem;width:240px;height:4px;background:rgba(255,255,255,.08);border-radius:2px">' +
+        '<div id="splash-bar" style="height:100%;width:0%;background:#00b4ff;border-radius:2px;transition:width .35s"></div>' +
+      '</div>';
+    document.body.appendChild(panel);
+  }
+  function show(){
+    if (!panel) build();
+    panel.style.display = 'flex';
+  }
+  function setProgress(p){
+    const bar = document.getElementById('splash-bar');
+    if (bar) bar.style.width = (p * 100) + '%';
+  }
+  function hide(){
+    if (panel) panel.style.display = 'none';
+  }
+  return { show: show, hide: hide, setProgress: setProgress };
+})();
+
+// ── Online lobby chat (text-only multiplayer chat) ─────
+const ChatSys = (function(){
+  const messages = [];
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'chat-panel';
+    panel.style.cssText =
+      'position:fixed;left:14px;bottom:14px;width:280px;max-height:200px;' +
+      'background:rgba(5,8,15,.78);border:1px solid rgba(0,180,255,.28);' +
+      'border-radius:10px;padding:.55rem .7rem;font-family:Orbitron,sans-serif;' +
+      'font-size:.72rem;color:#cdd9e6;z-index:55;display:none;' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    document.body.appendChild(panel);
+  }
+  function add(from, text){
+    messages.push({ from: from, text: text, time: Date.now() });
+    if (messages.length > 30) messages.shift();
+    refresh();
+  }
+  function refresh(){
+    if (!panel) build();
+    panel.innerHTML = messages.map(function(m){
+      return '<div style="margin:.18rem 0"><span style="color:#00b4ff">' + m.from + ':</span> ' + escapeHTML(m.text) + '</div>';
+    }).join('');
+    panel.scrollTop = panel.scrollHeight;
+  }
+  function escapeHTML(s){
+    return String(s).replace(/[<>&"]/g, function(c){
+      return { '<':'&lt;', '>':'&gt;', '&':'&amp;', '"':'&quot;' }[c];
+    });
+  }
+  function setVisible(v){
+    if (!panel) build();
+    panel.style.display = v ? 'block' : 'none';
+  }
+  function clear(){
+    messages.length = 0;
+    if (panel) panel.innerHTML = '';
+  }
+  return { add: add, setVisible: setVisible, clear: clear, refresh: refresh };
+})();
+
+// ── Multiplier system: combo/streak rewards ───────────
+const Multiplier = (function(){
+  let mult = 1.0;
+  let streak = 0;
+  function onPointWon(){
+    streak++;
+    mult = 1.0 + Math.min(2.0, streak * 0.2);
+    if (streak >= 3) showMsg('🔥 STREAK ×' + streak + '  (' + mult.toFixed(1) + 'x XP)', 1200);
+  }
+  function onPointLost(){
+    streak = 0;
+    mult = 1.0;
+  }
+  function get(){ return mult; }
+  function getStreak(){ return streak; }
+  function reset(){ streak = 0; mult = 1.0; }
+  return { onPointWon: onPointWon, onPointLost: onPointLost, get: get, getStreak: getStreak, reset: reset };
+})();
+
+// ── Detailed AI behavior trees (per-personality decision making) ─
+const AIBrain = (function(){
+  // The brain produces high-level intentions for a given AI player
+  // based on game state, ball trajectory, opponent position, and personality.
+  // Returns an object: { action, target, shotType, urgency }
+  function decide(pi, ballState, opponent, personality){
+    if (!ballState) return { action: 'idle' };
+    const onMySide = (P[pi].side === 'near') ? ballState.z > 0 : ballState.z < 0;
+    if (!onMySide){
+      // Recover to home position
+      const homeZ = personality.homeZ * (P[pi].side === 'near' ? CHL : -CHL);
+      return {
+        action: 'recover',
+        target: { x: 0, z: homeZ },
+        urgency: 0.3,
+      };
+    }
+    // Ball is on our side. Plan a hit.
+    const dx = P[pi].x - ballState.x;
+    const dz = P[pi].z - ballState.z;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+    if (dist > 6 && ballState.bounces > 0){
+      // Too far, give up gracefully
+      return { action: 'too_far' };
+    }
+    // Pick a shot type based on personality
+    const r = Math.random();
+    let shotType;
+    let cum = 0;
+    cum += personality.smashChance;
+    if (r < cum && ballState.y > 1.5){ shotType = 'smash'; }
+    else if (r < (cum += personality.lobChance))      { shotType = 'lob'; }
+    else if (r < (cum += personality.sliceChance))    { shotType = 'slice'; }
+    else if (r < (cum += personality.topspinChance))  { shotType = 'topspin'; }
+    else { shotType = 'flat'; }
+    // Pick a target based on opponent position (try to hit away from them)
+    const oppPos = opponent ? { x: opponent.x, z: opponent.z } : { x: 0, z: -9 };
+    let aimX = -oppPos.x * (personality.aimVariance || 1);
+    aimX += (Math.random() - 0.5) * (personality.aimVariance || 1) * 1.5;
+    aimX = Math.max(-CHW + 0.6, Math.min(CHW - 0.6, aimX));
+    const aimZ = (P[pi].side === 'near' ? -1 : 1) * (3 + (personality.aimDepth || 0.7) * 6);
+    return {
+      action: 'hit',
+      target: { x: aimX, z: aimZ },
+      shotType: shotType,
+      urgency: 0.8,
+    };
+  }
+  return { decide: decide };
+})();
+
+// ── Detailed achievements bank (40 achievements with categories) ──
+const AchievementsExt = (function(){
+  const achievements = [
+    // Beginner
+    { id:'first_match',     cat:'beginner',  name:'First Step',        desc:'Play your first match',                   icon:'👣' },
+    { id:'first_serve',     cat:'beginner',  name:'Service Started',   desc:'Hit your first serve',                    icon:'🏓' },
+    { id:'first_hit',       cat:'beginner',  name:'Contact!',          desc:'Hit your first ball in rally',           icon:'🎾' },
+    { id:'first_point',     cat:'beginner',  name:'Got One!',          desc:'Win your first point',                    icon:'1️⃣' },
+    { id:'first_game',      cat:'beginner',  name:'Game Won',          desc:'Win your first game',                     icon:'🎮' },
+    { id:'first_set',       cat:'beginner',  name:'Set Done',          desc:'Win your first set',                      icon:'✅' },
+    { id:'first_win',       cat:'beginner',  name:'Champion',          desc:'Win your first match',                    icon:'🏆' },
+    // Skills
+    { id:'ace_serve',       cat:'skills',    name:'Ace!',              desc:'Score an ace serve',                       icon:'⚡' },
+    { id:'three_aces_set',  cat:'skills',    name:'Triple Ace',        desc:'3 aces in one set',                       icon:'⚡' },
+    { id:'smash_winner',    cat:'skills',    name:'Hammer',            desc:'Land a smash for a winner',                icon:'🔨' },
+    { id:'three_smashes_match', cat:'skills', name:'Hammer Time',     desc:'3 smashes in one match',                  icon:'🔨' },
+    { id:'perfect_serve',   cat:'skills',    name:'Perfect Service',   desc:'Hit a green-zone serve',                  icon:'🎯' },
+    { id:'rally_5',         cat:'skills',    name:'Mini Rally',        desc:'Reach a 5-shot rally',                    icon:'🔁' },
+    { id:'rally_10',        cat:'skills',    name:'Rally King',        desc:'Reach a 10-shot rally',                   icon:'👑' },
+    { id:'rally_20',        cat:'skills',    name:'Marathon',          desc:'Reach a 20-shot rally',                   icon:'🏃' },
+    { id:'rally_30',        cat:'skills',    name:'Eternal Rally',     desc:'Reach a 30-shot rally',                   icon:'∞' },
+    // Speed
+    { id:'speed_180',       cat:'speed',     name:'Fast Serve',        desc:'180 km/h serve',                          icon:'🚀' },
+    { id:'speed_200',       cat:'speed',     name:'Sound Barrier',     desc:'200 km/h serve',                          icon:'💨' },
+    { id:'speed_220',       cat:'speed',     name:'Speed Demon',       desc:'220 km/h serve',                          icon:'🚀' },
+    { id:'speed_240',       cat:'speed',     name:'Hyper Serve',       desc:'240 km/h serve',                          icon:'⚡' },
+    // Clutch
+    { id:'comeback_set',    cat:'clutch',    name:'Comeback',          desc:'Win set after being down 0-4',           icon:'💪' },
+    { id:'comeback_match',  cat:'clutch',    name:'Comeback King',     desc:'Win match after losing 1st set',         icon:'💪' },
+    { id:'deuce_save',      cat:'clutch',    name:'Saved',              desc:'Win game from deuce after losing adv',    icon:'😅' },
+    { id:'tiebreak_win',    cat:'clutch',    name:'Tiebreak Hero',     desc:'Win a tiebreak',                         icon:'⚖' },
+    { id:'shutout',         cat:'clutch',    name:'Bagel',             desc:'Win a set 6-0',                          icon:'🥯' },
+    { id:'double_bagel',    cat:'clutch',    name:'Double Bagel',      desc:'Win match 6-0, 6-0',                     icon:'🥯' },
+    // Variety
+    { id:'all_modes',       cat:'variety',   name:'Sampler',           desc:'Play all game modes',                     icon:'🎲' },
+    { id:'all_courts',      cat:'variety',   name:'Globetrotter',      desc:'Win on all 4 court types',               icon:'🌍' },
+    { id:'all_chars',       cat:'variety',   name:'Identity Crisis',   desc:'Use all 12 characters',                  icon:'🎭' },
+    { id:'tournament_easy', cat:'variety',   name:'Easy Champ',        desc:'Win Easy tournament',                    icon:'🥉' },
+    { id:'tournament_med',  cat:'variety',   name:'Medium Champ',      desc:'Win Medium tournament',                  icon:'🥈' },
+    { id:'tournament_hard', cat:'variety',   name:'Hard Champ',        desc:'Win Hard tournament',                    icon:'🥇' },
+    // Practice
+    { id:'practice_100',    cat:'practice',  name:'Practice Starter',  desc:'Score 100 in any practice mode',         icon:'🏋' },
+    { id:'practice_500',    cat:'practice',  name:'Practice Hero',     desc:'Score 500 in practice',                  icon:'🏋' },
+    { id:'practice_1000',   cat:'practice',  name:'Drill Sergeant',    desc:'Score 1000 in practice',                 icon:'⚒' },
+    { id:'practice_2000',   cat:'practice',  name:'Practice God',      desc:'Score 2000 in practice',                 icon:'⚒' },
+    // Cosmetics
+    { id:'first_unlock',    cat:'cosmetic',  name:'New Look',          desc:'Unlock your first cosmetic',             icon:'👕' },
+    { id:'all_rackets',     cat:'cosmetic',  name:'Racket Collector',  desc:'Own all rackets',                        icon:'🎾' },
+    { id:'all_balls',       cat:'cosmetic',  name:'Ball Collector',    desc:'Own all balls',                          icon:'⚽' },
+    { id:'all_hats',        cat:'cosmetic',  name:'Hat Trick',         desc:'Own all hats',                           icon:'🎩' },
+    // Misc
+    { id:'lvl_5',           cat:'misc',      name:'Rising Star',       desc:'Reach level 5',                          icon:'⭐' },
+    { id:'lvl_10',          cat:'misc',      name:'Veteran',           desc:'Reach level 10',                         icon:'🌟' },
+    { id:'lvl_20',          cat:'misc',      name:'Legend',            desc:'Reach level 20',                         icon:'💫' },
+    { id:'play_60min',      cat:'misc',      name:'Hour Played',       desc:'Play for 60 minutes',                    icon:'⏱' },
+    { id:'play_5h',         cat:'misc',      name:'5 Hours In',        desc:'Play for 5 hours',                       icon:'⏰' },
+  ];
+  const KEY = 'spike_tennis_ach_v1';
+  const earned = {};
+  function load(){
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw){ Object.assign(earned, JSON.parse(raw)); }
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(earned)); } catch(_){}
+  }
+  function award(id){
+    if (earned[id]) return false;
+    const a = achievements.find(function(x){ return x.id === id; });
+    if (!a) return false;
+    earned[id] = Date.now();
+    save();
+    showMsg(a.icon + ' ' + a.name + ': ' + a.desc, 3000);
+    AudioSys.score();
+    Profile.awardXP(50, 'achievement');
+    return true;
+  }
+  function isEarned(id){ return !!earned[id]; }
+  function getByCategory(cat){ return achievements.filter(function(a){ return a.cat === cat; }); }
+  function getCategories(){
+    const cats = {};
+    achievements.forEach(function(a){ cats[a.cat] = true; });
+    return Object.keys(cats);
+  }
+  function getProgress(){
+    const total = achievements.length;
+    const got = Object.keys(earned).length;
+    return { got: got, total: total, percent: Math.round(got / total * 100) };
+  }
+  function getAll(){ return achievements.slice(); }
+  // Auto-check based on current state
+  function autoCheck(){
+    if (Profile.data.totalMatches >= 1) award('first_match');
+    if (Profile.data.totalWins >= 1)    award('first_win');
+    if (Profile.data.fastestServe >= 180) award('speed_180');
+    if (Profile.data.fastestServe >= 200) award('speed_200');
+    if (Profile.data.fastestServe >= 220) award('speed_220');
+    if (Profile.data.fastestServe >= 240) award('speed_240');
+    if (Profile.data.bestRally >= 5)  award('rally_5');
+    if (Profile.data.bestRally >= 10) award('rally_10');
+    if (Profile.data.bestRally >= 20) award('rally_20');
+    if (Profile.data.bestRally >= 30) award('rally_30');
+    if (Profile.data.totalAces >= 1)  award('ace_serve');
+    if (Profile.data.totalSmashes >= 3) award('three_smashes_match');
+    if (Profile.data.tournamentWins >= 1) award('tournament_med');
+    if (Profile.data.level >= 5)  award('lvl_5');
+    if (Profile.data.level >= 10) award('lvl_10');
+    if (Profile.data.level >= 20) award('lvl_20');
+    if (Profile.data.practiceBest >= 100)  award('practice_100');
+    if (Profile.data.practiceBest >= 500)  award('practice_500');
+    if (Profile.data.practiceBest >= 1000) award('practice_1000');
+    if (Profile.data.practiceBest >= 2000) award('practice_2000');
+  }
+  load();
+  return {
+    achievements: achievements, earned: earned,
+    award: award, isEarned: isEarned,
+    getByCategory: getByCategory, getCategories: getCategories,
+    getProgress: getProgress, autoCheck: autoCheck, getAll: getAll,
+  };
+})();
+
+// ── Special Abilities (consumable power moves with cooldowns) ───
+const Abilities = (function(){
+  const abilities = {
+    boost: {
+      name: 'Speed Boost',
+      desc: 'Doubles speed for 4s',
+      cooldown: 18,
+      duration: 4,
+      keyHint: '1',
+    },
+    powerShot: {
+      name: 'Power Shot',
+      desc: 'Next shot has 2x power',
+      cooldown: 12,
+      duration: 0,
+      keyHint: '2',
+    },
+    laserAim: {
+      name: 'Laser Aim',
+      desc: 'Next shot lands exactly where you aim',
+      cooldown: 20,
+      duration: 0,
+      keyHint: '3',
+    },
+    timeStop: {
+      name: 'Time Stop',
+      desc: 'Slow time for 2s',
+      cooldown: 30,
+      duration: 2,
+      keyHint: '4',
+    },
+    multiBall: {
+      name: 'Multi Ball',
+      desc: 'Spawn extra balls (chaos)',
+      cooldown: 45,
+      duration: 0,
+      keyHint: '5',
+    },
+  };
+  const cooldowns = {};
+  const active = {};
+  function trigger(name){
+    const a = abilities[name];
+    if (!a) return false;
+    if (cooldowns[name] && cooldowns[name] > 0) return false;
+    cooldowns[name] = a.cooldown;
+    if (a.duration > 0){
+      active[name] = a.duration;
+    }
+    return true;
+  }
+  function isActive(name){ return active[name] && active[name] > 0; }
+  function update(dt){
+    for (const k in cooldowns){
+      if (cooldowns[k] > 0) cooldowns[k] -= dt;
+    }
+    for (const k in active){
+      if (active[k] > 0) active[k] -= dt;
+    }
+  }
+  function getCooldown(name){ return Math.max(0, cooldowns[name] || 0); }
+  function reset(){
+    for (const k in cooldowns) delete cooldowns[k];
+    for (const k in active) delete active[k];
+  }
+  return { abilities: abilities, trigger: trigger, isActive: isActive, update: update, getCooldown: getCooldown, reset: reset };
+})();
+
+// ── Stamina system (drains as you sprint, regenerates while standing) ──
+const Stamina = (function(){
+  const players = [{ value: 100, max: 100 }, { value: 100, max: 100 }];
+  function drain(pi, amount){
+    if (!players[pi]) return;
+    players[pi].value = Math.max(0, players[pi].value - amount);
+  }
+  function regen(pi, amount){
+    if (!players[pi]) return;
+    players[pi].value = Math.min(players[pi].max, players[pi].value + amount);
+  }
+  function get(pi){ return players[pi] ? players[pi].value : 0; }
+  function getMax(pi){ return players[pi] ? players[pi].max : 100; }
+  function reset(){
+    players.forEach(function(p){ p.value = p.max; });
+  }
+  function update(dt, isMoving0, isSprinting0){
+    if (isMoving0){
+      drain(0, isSprinting0 ? 18 * dt : 6 * dt);
+    } else {
+      regen(0, 12 * dt);
+    }
+    regen(1, 8 * dt);
+  }
+  return { drain: drain, regen: regen, get: get, getMax: getMax, reset: reset, update: update, players: players };
+})();
+
+// ── Big sound bank: dozens more named sound effects ────────
+const SoundBank = (function(){
+  let ac = null;
+  function ctx(){
+    if (!ac){
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (Ctx) ac = new Ctx();
+      } catch(_){}
+    }
+    return ac;
+  }
+  function tone(freq, dur, type, vol){
+    if (AudioSys.isMuted()) return;
+    const c = ctx();
+    if (!c) return;
+    const t = c.currentTime;
+    const osc = c.createOscillator();
+    osc.type = type || 'sine';
+    osc.frequency.value = freq;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol || 0.1, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(g); g.connect(c.destination);
+    osc.start(t); osc.stop(t + dur + 0.02);
+  }
+  function noiseBurst(dur, vol, freq){
+    if (AudioSys.isMuted()) return;
+    const c = ctx();
+    if (!c) return;
+    const buf = c.createBuffer(1, Math.floor(c.sampleRate * dur), c.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i=0; i<data.length; i++){
+      data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    }
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    const flt = c.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.value = freq || 1000;
+    flt.Q.value = 4;
+    const g = c.createGain();
+    g.gain.value = vol || 0.1;
+    src.connect(flt); flt.connect(g); g.connect(c.destination);
+    src.start();
+  }
+  // Named effects:
+  function levelUp(){
+    [392, 523, 659, 784, 1047].forEach(function(f, i){
+      setTimeout(function(){ tone(f, 0.20, 'square', 0.10); }, i * 70);
+    });
+  }
+  function unlock(){
+    [659, 784, 988, 1175].forEach(function(f, i){
+      setTimeout(function(){ tone(f, 0.18, 'triangle', 0.10); }, i * 80);
+    });
+  }
+  function buzz(){ tone(180, 0.40, 'square', 0.12); }
+  function ding(){ tone(1047, 0.18, 'sine', 0.10); }
+  function dong(){ tone(330, 0.30, 'sine', 0.10); }
+  function tickTock(){ tone(800, 0.05, 'square', 0.06); setTimeout(function(){ tone(660, 0.05, 'square', 0.06); }, 200); }
+  function correct(){ [523, 659].forEach(function(f, i){ setTimeout(function(){ tone(f, 0.20, 'sine', 0.12); }, i * 100); }); }
+  function wrong(){ tone(220, 0.20, 'sawtooth', 0.10); setTimeout(function(){ tone(180, 0.30, 'sawtooth', 0.10); }, 100); }
+  function startBeep(){ tone(880, 0.10, 'square', 0.10); }
+  function endBeep(){ tone(440, 0.30, 'square', 0.10); }
+  function powerUp(){ for (let i=0; i<10; i++){ setTimeout(function(){ tone(200 + i*80, 0.04, 'square', 0.06); }, i * 20); } }
+  function explode(){ noiseBurst(0.45, 0.3, 600); }
+  function whistle(){ tone(2200, 0.25, 'sine', 0.05); }
+  function clap(){ noiseBurst(0.05, 0.15, 3000); }
+  function applause(){ for (let i=0; i<20; i++){ setTimeout(function(){ noiseBurst(0.03, 0.05, 2500 + Math.random()*1500); }, i * 60); } }
+  function thunder(){ noiseBurst(0.8, 0.35, 200); }
+  function sparkle(){ for (let i=0; i<8; i++){ setTimeout(function(){ tone(1000 + i*120, 0.08, 'sine', 0.05); }, i * 50); } }
+  function alert(){ for (let i=0; i<3; i++){ setTimeout(function(){ tone(1100, 0.10, 'square', 0.10); }, i * 200); } }
+  return {
+    levelUp: levelUp, unlock: unlock, buzz: buzz, ding: ding, dong: dong,
+    tickTock: tickTock, correct: correct, wrong: wrong,
+    startBeep: startBeep, endBeep: endBeep, powerUp: powerUp,
+    explode: explode, whistle: whistle, clap: clap, applause: applause,
+    thunder: thunder, sparkle: sparkle, alert: alert
+  };
+})();
+
+// ── Rumble: gamepad vibration + visual jitter when ball impacts ──
+const Rumble = (function(){
+  let active = false;
+  function pulse(strength, duration){
+    if ('navigator' in window && navigator.getGamepads){
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (let i=0; i<pads.length; i++){
+        const p = pads[i];
+        if (p && p.vibrationActuator){
+          try {
+            p.vibrationActuator.playEffect('dual-rumble', {
+              startDelay: 0, duration: duration || 200,
+              weakMagnitude: strength * 0.6, strongMagnitude: strength
+            });
+          } catch(_){}
+        }
+      }
+    }
+  }
+  return { pulse: pulse };
+})();
+
+// ── Shop UI Panel ──────────────────────────────────
+const ShopUI = (function(){
+  let panel = null;
+  let activeTab = 'racket';
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'shop-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:124;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(680px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,220,50,.35);border-radius:18px;' +
+        'padding:1.6rem 1.4rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center">' +
+            '<h2 style="font-size:1.3rem;letter-spacing:.06em">SHOP</h2>' +
+            '<div id="shop-coins" style="font-size:.85rem;color:#ffd700">🪙 0 coins</div>' +
+          '</div>' +
+          '<div id="shop-tabs" style="display:flex;gap:.4rem;flex-wrap:wrap">' +
+            tabBtn('racket','Rackets') + tabBtn('ball','Balls') + tabBtn('trail','Trails') +
+            tabBtn('hat','Hats') + tabBtn('emote','Emotes') + tabBtn('banner','Banners') +
+          '</div>' +
+          '<div id="shop-items" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.6rem;max-height:60vh;overflow-y:auto"></div>' +
+          '<button class="abtn" id="shop-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('shop-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+    document.querySelectorAll('#shop-tabs .stab').forEach(function(b){
+      b.onclick = function(){
+        AudioSys.click();
+        activeTab = b.getAttribute('data-tab');
+        renderTabs();
+        renderItems();
+      };
+    });
+  }
+  function tabBtn(id, label){
+    return '<button class="stab" data-tab="' + id + '" style="' +
+      'flex:1;min-width:80px;padding:.55rem .35rem;border-radius:8px;cursor:pointer;' +
+      'font-family:Orbitron,sans-serif;font-size:.65rem;border:1px solid rgba(255,255,255,.1);' +
+      'background:transparent;color:#637490;letter-spacing:.06em">' + label + '</button>';
+  }
+  function renderTabs(){
+    document.querySelectorAll('#shop-tabs .stab').forEach(function(b){
+      const isActive = b.getAttribute('data-tab') === activeTab;
+      b.style.background = isActive ? 'rgba(255,220,50,.18)' : 'transparent';
+      b.style.borderColor = isActive ? '#ffdc32' : 'rgba(255,255,255,.1)';
+      b.style.color = isActive ? '#ffdc32' : '#637490';
+    });
+  }
+  function renderItems(){
+    const grid = document.getElementById('shop-items');
+    grid.innerHTML = '';
+    const items = Shop.getAll().filter(function(i){ return i.type === activeTab; });
+    items.forEach(function(item){
+      const owned = Shop.isOwned(item.id);
+      const equipped = Shop.isEquipped(item.id);
+      const canBuy = !owned && Profile.data.level >= item.levelReq && Shop.getCoins() >= item.cost;
+      const card = document.createElement('div');
+      card.style.cssText =
+        'background:rgba(12,18,32,.92);border:1.5px solid ' + (equipped ? '#ffdc32' : 'rgba(255,255,255,.08)') + ';' +
+        'border-radius:10px;padding:.7rem .5rem;display:flex;flex-direction:column;align-items:center;gap:.3rem;' +
+        'text-align:center;cursor:' + (owned || canBuy ? 'pointer' : 'not-allowed') + ';' +
+        'opacity:' + (owned || canBuy ? '1' : '.55');
+      const swatchColor = (item.color != null) ? '#' + item.color.toString(16).padStart(6, '0') : '#888';
+      card.innerHTML =
+        '<div style="width:60px;height:60px;border-radius:8px;background:' + swatchColor + ';' +
+        'box-shadow:0 0 16px ' + swatchColor + '88"></div>' +
+        '<div style="font-size:.78rem;font-weight:700;color:#fff;letter-spacing:.04em">' + item.name + '</div>' +
+        '<div style="font-size:.62rem;color:' + (equipped ? '#ffdc32' : owned ? '#b2ff14' : canBuy ? '#9bc4ec' : '#666') + '">' +
+          (equipped ? '✓ EQUIPPED' : owned ? 'CLICK TO EQUIP' : canBuy ? '🪙 ' + item.cost : 'LVL ' + item.levelReq + (Shop.getCoins() < item.cost ? ' / 🪙 ' + item.cost : '')) +
+        '</div>';
+      card.onclick = function(){
+        if (!owned){
+          if (canBuy){
+            const r = Shop.buy(item.id);
+            if (r.ok){
+              SoundBank.unlock();
+              showMsg('🛒 Bought: ' + item.name, 1500);
+              renderItems();
+              updateCoins();
+            }
+          }
+        } else {
+          if (Shop.equip(item.id)){
+            AudioSys.click();
+            showMsg('✓ Equipped: ' + item.name, 1200);
+            renderItems();
+          }
+        }
+      };
+      grid.appendChild(card);
+    });
+  }
+  function updateCoins(){
+    const el = document.getElementById('shop-coins');
+    if (el) el.textContent = '🪙 ' + Shop.getCoins() + ' coins';
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    renderTabs();
+    renderItems();
+    updateCoins();
+    panel.style.display = 'block';
+  }
+  function close(){
+    if (panel) panel.style.display = 'none';
+  }
+  return { open: open, close: close };
+})();
+
+// ── Trophies UI Panel ──────────────────────────────
+const TrophyUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'trophy-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:125;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(680px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,215,0,.35);border-radius:18px;' +
+        'padding:1.6rem 1.4rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.3rem;text-align:center;letter-spacing:.06em;color:#ffd700">🏆 TROPHIES</h2>' +
+          '<div id="trophy-progress" style="font-size:.78rem;color:#aabbcc;text-align:center"></div>' +
+          '<div id="trophy-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.55rem;max-height:60vh;overflow-y:auto"></div>' +
+          '<button class="abtn" id="trophy-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('trophy-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const grid = document.getElementById('trophy-grid');
+    grid.innerHTML = '';
+    Trophies.getAll().forEach(function(t){
+      const earned = Trophies.isEarned(t.id);
+      const card = document.createElement('div');
+      card.style.cssText =
+        'background:' + (earned ? 'rgba(50,30,5,.85)' : 'rgba(12,18,32,.6)') + ';' +
+        'border:1.5px solid ' + (earned ? '#ffd700' : 'rgba(255,255,255,.05)') + ';' +
+        'border-radius:10px;padding:.7rem .5rem;display:flex;flex-direction:column;align-items:center;gap:.25rem;' +
+        'text-align:center;opacity:' + (earned ? '1' : '.4');
+      card.innerHTML =
+        '<div style="font-size:1.6rem;line-height:1">' + t.icon + '</div>' +
+        '<div style="font-size:.74rem;font-weight:700;color:' + (earned ? '#ffd700' : '#aabbcc') + '">' + t.name + '</div>' +
+        '<div style="font-size:.6rem;color:#7a8ba0;line-height:1.5">' + t.desc + '</div>';
+      grid.appendChild(card);
+    });
+    const earned = Trophies.data.earned.length;
+    const total = Trophies.getAll().length;
+    document.getElementById('trophy-progress').textContent =
+      earned + ' / ' + total + ' earned (' + Math.round(earned/total*100) + '%)';
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    Trophies.check();
+    render();
+    panel.style.display = 'block';
+  }
+  function close(){
+    if (panel) panel.style.display = 'none';
+  }
+  return { open: open, close: close };
+})();
+
+// ── Profile / Player Card UI ──────────────────────────
+const ProfileUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'profile-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:126;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(540px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.8rem 1.6rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.4rem;text-align:center;letter-spacing:.06em;color:#00b4ff">PLAYER PROFILE</h2>' +
+          '<div id="profile-card" style="display:flex;flex-direction:column;gap:.7rem"></div>' +
+          '<button class="abtn" id="profile-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('profile-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const card = document.getElementById('profile-card');
+    const xpInfo = Profile.getXPProgress();
+    let html = '<div style="text-align:center">' +
+      '<div style="font-size:2.5rem;font-weight:900;color:#00b4ff;text-shadow:0 0 20px rgba(0,180,255,.5)">LVL ' + Profile.data.level + '</div>' +
+      '<div style="font-size:.7rem;color:#aabbcc;margin-top:.2rem">' + Profile.data.xp + ' XP / ' + xpInfo.next + ' XP</div>' +
+      '<div style="margin-top:.5rem;height:8px;background:rgba(255,255,255,.07);border-radius:4px;overflow:hidden">' +
+        '<div style="height:100%;width:' + Math.round(xpInfo.progress * 100) + '%;background:linear-gradient(90deg,#00b4ff,#b2ff14);border-radius:4px"></div>' +
+      '</div>' +
+      '</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:.45rem .8rem;font-size:.72rem;border-top:1px solid rgba(255,255,255,.08);padding-top:.7rem">';
+    html += statRow('Matches Played', Profile.data.totalMatches);
+    html += statRow('Matches Won', Profile.data.totalWins);
+    const wr = Profile.data.totalMatches > 0 ? Math.round(Profile.data.totalWins/Profile.data.totalMatches*100) : 0;
+    html += statRow('Win Rate', wr + '%');
+    html += statRow('Tournaments Won', Profile.data.tournamentWins);
+    html += statRow('Total Aces', Profile.data.totalAces);
+    html += statRow('Total Smashes', Profile.data.totalSmashes);
+    html += statRow('Best Rally', Profile.data.bestRally + ' shots');
+    html += statRow('Fastest Serve', Profile.data.fastestServe + ' km/h');
+    html += statRow('Practice Best', Profile.data.practiceBest);
+    html += statRow('Coins', '🪙 ' + Shop.getCoins());
+    html += '</div>';
+    html += '<div style="font-size:.66rem;color:#7a8ba0;text-align:center;margin-top:.4rem">Unlocked: ' +
+      Profile.data.unlockedSkins.length + ' chars · ' + Profile.data.unlockedThemes.length + ' courts</div>';
+    card.innerHTML = html;
+  }
+  function statRow(label, val){
+    return '<div style="color:#7a8ba0">' + label + '</div>' +
+      '<div style="text-align:right;color:#fff;font-weight:700">' + val + '</div>';
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  function close(){
+    if (panel) panel.style.display = 'none';
+  }
+  return { open: open, close: close, render: render };
+})();
+
+// ── Achievements UI Panel ──────────────────────────
+const AchievementsUI = (function(){
+  let panel = null;
+  let activeCat = 'beginner';
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'ach-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:127;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    let tabHTML = '';
+    AchievementsExt.getCategories().forEach(function(cat){
+      tabHTML += '<button class="acat" data-cat="' + cat + '" style="flex:1;min-width:90px;padding:.55rem .35rem;' +
+        'border-radius:8px;cursor:pointer;font-family:Orbitron,sans-serif;font-size:.65rem;' +
+        'border:1px solid rgba(255,255,255,.1);background:transparent;color:#637490;letter-spacing:.06em">' +
+        cat.toUpperCase() + '</button>';
+    });
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(720px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(178,255,20,.35);border-radius:18px;' +
+        'padding:1.6rem 1.4rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.3rem;text-align:center;letter-spacing:.06em;color:#b2ff14">🏅 ACHIEVEMENTS</h2>' +
+          '<div id="ach-progress" style="font-size:.78rem;color:#aabbcc;text-align:center"></div>' +
+          '<div id="ach-tabs" style="display:flex;gap:.4rem;flex-wrap:wrap">' + tabHTML + '</div>' +
+          '<div id="ach-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.55rem;max-height:55vh;overflow-y:auto"></div>' +
+          '<button class="abtn" id="ach-panel-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('ach-panel-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+    document.querySelectorAll('#ach-tabs .acat').forEach(function(b){
+      b.onclick = function(){
+        AudioSys.click();
+        activeCat = b.getAttribute('data-cat');
+        renderTabs(); renderItems();
+      };
+    });
+  }
+  function renderTabs(){
+    document.querySelectorAll('#ach-tabs .acat').forEach(function(b){
+      const isActive = b.getAttribute('data-cat') === activeCat;
+      b.style.background = isActive ? 'rgba(178,255,20,.12)' : 'transparent';
+      b.style.borderColor = isActive ? '#b2ff14' : 'rgba(255,255,255,.1)';
+      b.style.color = isActive ? '#b2ff14' : '#637490';
+    });
+  }
+  function renderItems(){
+    const grid = document.getElementById('ach-grid');
+    grid.innerHTML = '';
+    AchievementsExt.getByCategory(activeCat).forEach(function(a){
+      const earned = AchievementsExt.isEarned(a.id);
+      const card = document.createElement('div');
+      card.style.cssText =
+        'background:' + (earned ? 'rgba(35,55,5,.6)' : 'rgba(12,18,32,.6)') + ';' +
+        'border:1.5px solid ' + (earned ? '#b2ff14' : 'rgba(255,255,255,.05)') + ';' +
+        'border-radius:10px;padding:.65rem .5rem;display:flex;align-items:center;gap:.5rem;' +
+        'opacity:' + (earned ? '1' : '.55');
+      card.innerHTML =
+        '<div style="font-size:1.7rem;line-height:1;flex-shrink:0">' + a.icon + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:.15rem">' +
+          '<div style="font-size:.74rem;font-weight:700;color:' + (earned ? '#b2ff14' : '#aabbcc') + '">' + a.name + '</div>' +
+          '<div style="font-size:.6rem;color:#7a8ba0;line-height:1.4">' + a.desc + '</div>' +
+        '</div>';
+      grid.appendChild(card);
+    });
+    const prog = AchievementsExt.getProgress();
+    document.getElementById('ach-progress').textContent =
+      prog.got + ' / ' + prog.total + ' unlocked (' + prog.percent + '%)';
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    AchievementsExt.autoCheck();
+    renderTabs(); renderItems();
+    panel.style.display = 'block';
+  }
+  function close(){
+    if (panel) panel.style.display = 'none';
+  }
+  return { open: open, close: close };
+})();
+
+// ── Skills UI Panel ────────────────────────────────
+const SkillsUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'skills-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(560px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(160,80,255,.35);border-radius:18px;' +
+        'padding:1.8rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.3rem;text-align:center;letter-spacing:.06em;color:#a050ff">⚙ SKILLS</h2>' +
+          '<div id="skills-grid" style="display:flex;flex-direction:column;gap:.5rem"></div>' +
+          '<button class="abtn" id="skills-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('skills-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const grid = document.getElementById('skills-grid');
+    grid.innerHTML = '';
+    const all = SkillSystem.getAll();
+    for (const k in all){
+      const s = all[k];
+      const need = SkillSystem.xpForLevel(s.level + 1);
+      const prog = Math.min(1, s.xp / need);
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;flex-direction:column;gap:.25rem;padding:.55rem;border:1px solid rgba(255,255,255,.05);border-radius:8px';
+      row.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<span style="font-size:.78rem;font-weight:700">' + s.name + '</span>' +
+          '<span style="font-size:.7rem;color:#a050ff">Lvl ' + s.level + ' / ' + s.max + '</span>' +
+        '</div>' +
+        '<div style="font-size:.64rem;color:#7a8ba0">' + s.desc + '</div>' +
+        '<div style="height:5px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden">' +
+          '<div style="height:100%;width:' + Math.round(prog*100) + '%;background:#a050ff;border-radius:3px"></div>' +
+        '</div>';
+      grid.appendChild(row);
+    }
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  function close(){
+    if (panel) panel.style.display = 'none';
+  }
+  return { open: open, close: close };
+})();
+
+// ── Mini-Game Picker Panel ─────────────────────────
+const MiniGamePicker = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'minigame-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    let cards = '';
+    for (const k in MiniGames.config){
+      const c = MiniGames.config[k];
+      cards += '<div class="mgpcard" data-id="' + k + '" style="background:rgba(12,18,32,.92);' +
+        'border:1.5px solid rgba(255,255,255,.07);border-radius:14px;padding:1rem .9rem;cursor:pointer;' +
+        'display:flex;flex-direction:column;align-items:center;gap:.4rem;text-align:center">' +
+        '<div style="font-size:1.5rem">🎯</div>' +
+        '<div style="font-size:.85rem;font-weight:700;color:#fff">' + c.name + '</div>' +
+        '<div style="font-size:.62rem;color:#7a8ba0;line-height:1.4">' + c.desc + '</div>' +
+        '<div style="font-size:.6rem;color:#b2ff14">Best: ' + (MiniGames.getBest(k) || 0) + '</div>' +
+        '</div>';
+    }
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(680px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.6rem 1.4rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.3rem;text-align:center;letter-spacing:.06em;color:#00b4ff">🏋 PRACTICE MODES</h2>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.6rem">' + cards + '</div>' +
+          '<button class="gbtn" id="mgp-close">← Back</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('mgp-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+    document.querySelectorAll('.mgpcard').forEach(function(c){
+      c.onclick = function(){
+        AudioSys.click();
+        panel.style.display = 'none';
+        MiniGames.start(c.getAttribute('data-id'));
+        Practice.start(); // base practice mode supports our drills
+      };
+    });
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Tournament UI / Bracket ────────────────────────
+const TournamentUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'tournament-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:124;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(620px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,215,0,.35);border-radius:18px;' +
+        'padding:1.8rem 1.6rem;width:100%;display:flex;flex-direction:column;gap:1.2rem">' +
+          '<h2 style="font-size:1.4rem;text-align:center;letter-spacing:.06em;color:#ffd700">🏆 TOURNAMENT</h2>' +
+          '<div style="font-size:.78rem;color:#aabbcc;text-align:center">Beat 5 opponents of escalating difficulty.</div>' +
+          '<div id="tour-bracket" style="display:flex;flex-direction:column;gap:.5rem"></div>' +
+          '<div style="display:flex;gap:.6rem;margin-top:.5rem">' +
+            '<button class="gbtn" id="tour-back" style="flex:1">← Back</button>' +
+            '<button class="abtn" id="tour-start" style="flex:2">START TOURNAMENT ▶</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('tour-back').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+    document.getElementById('tour-start').onclick = function(){
+      AudioSys.click();
+      panel.style.display = 'none';
+      Tournament.start();
+    };
+  }
+  function render(){
+    const bracket = document.getElementById('tour-bracket');
+    bracket.innerHTML = '';
+    const opponents = [
+      { name:'Practice Bot',     diff:'easy',   icon:'🤖' },
+      { name:'Local Champion',   diff:'easy',   icon:'🏠' },
+      { name:'Regional Player',  diff:'medium', icon:'🏆' },
+      { name:'National Star',    diff:'medium', icon:'⭐' },
+      { name:'World Champion',   diff:'hard',   icon:'👑' },
+    ];
+    opponents.forEach(function(opp, i){
+      const row = document.createElement('div');
+      const colorByDiff = { easy:'#60ff80', medium:'#ffdc32', hard:'#ff5050' };
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:.65rem .9rem;' +
+        'background:rgba(8,12,22,.6);border:1px solid rgba(255,255,255,.06);border-radius:10px';
+      row.innerHTML =
+        '<div style="display:flex;align-items:center;gap:.6rem">' +
+          '<div style="font-size:1.4rem">' + opp.icon + '</div>' +
+          '<div style="display:flex;flex-direction:column">' +
+            '<div style="font-size:.85rem;font-weight:700">Round ' + (i+1) + ': ' + opp.name + '</div>' +
+            '<div style="font-size:.65rem;color:#7a8ba0">Difficulty: <span style="color:' + colorByDiff[opp.diff] + '">' + opp.diff.toUpperCase() + '</span></div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="font-size:.7rem;color:#aabbcc">Best of 3 sets</div>';
+      bracket.appendChild(row);
+    });
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Settings Expansion (much more options) ─────────
+const SettingsX = (function(){
+  let panel = null;
+  const data = {
+    masterVolume: 0.6,
+    sfxVolume: 0.7,
+    musicVolume: 0.06,
+    crowdVolume: 0.18,
+    sfxMuted: false,
+    musicMuted: false,
+    cameraSensitivity: 0.005,
+    cameraInvertY: false,
+    cameraSnap: false,
+    fov: 68,
+    shadows: true,
+    bloom: false,
+    particles: true,
+    ballTrail: true,
+    showRadar: true,
+    showLanding: true,
+    showCommentator: true,
+    showHints: true,
+    autoCenterCamera: true,
+    weatherEffect: 'clear',
+    timeOfDay: 'day',
+    courtTheme: 'hard',
+    shoulderOffset: 2.4,
+    cameraPitch: 0.45,
+    cameraDistance: 8.0,
+    moveSpeed: 1.0,
+    aiAggressiveness: 1.0,
+    aiPersonality: 'baseliner',
+    multiBall: false,
+    powerUpsOn: false,
+    dayNightCycle: false,
+  };
+  function load(){
+    try {
+      const raw = localStorage.getItem('spike_tennis_settings_v2');
+      if (raw){ Object.assign(data, JSON.parse(raw)); }
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem('spike_tennis_settings_v2', JSON.stringify(data)); } catch(_){}
+  }
+  function apply(){
+    if (camera){
+      camera.fov = data.fov;
+      camera.updateProjectionMatrix();
+    }
+    if (renderer){
+      renderer.shadowMap.enabled = !!data.shadows;
+    }
+    if (CAM){
+      CAM.shoulder = data.shoulderOffset;
+      CAM.pitch = data.cameraPitch;
+      CAM.dist = data.cameraDistance;
+    }
+    AudioSys.setMuted(data.sfxMuted);
+    AudioSys.setCrowdVolume(data.sfxMuted ? 0 : data.crowdVolume);
+    Music.setVolume(data.musicMuted ? 0 : data.musicVolume);
+    Weather.setMode(data.weatherEffect);
+    PowerUps.setEnabled(data.powerUpsOn);
+    DayNight.setEnabled(data.dayNightCycle);
+    MultiBall.setEnabled(data.multiBall);
+    if (data.aiPersonality) setAIPersonality(data.aiPersonality);
+  }
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'sx-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(640px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.6rem 1.4rem;width:100%;display:flex;flex-direction:column;gap:.7rem">' +
+          '<h2 style="font-size:1.3rem;text-align:center;letter-spacing:.06em">⚙ ALL SETTINGS</h2>' +
+          '<div id="sx-sections" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:1rem"></div>' +
+          '<div style="display:flex;gap:.5rem">' +
+            '<button class="gbtn" id="sx-reset" style="flex:1">RESET</button>' +
+            '<button class="abtn" id="sx-close" style="flex:2">CLOSE</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('sx-close').onclick = function(){ AudioSys.click(); save(); apply(); panel.style.display = 'none'; };
+    document.getElementById('sx-reset').onclick = function(){
+      AudioSys.click();
+      if (confirm('Reset all settings to defaults?')){
+        try { localStorage.removeItem('spike_tennis_settings_v2'); } catch(_){}
+        showMsg('Settings reset', 1500);
+        location.reload();
+      }
+    };
+  }
+  function render(){
+    const sections = document.getElementById('sx-sections');
+    sections.innerHTML = '';
+    sections.appendChild(makeSection('AUDIO', [
+      slider('masterVolume', 'Master', 0, 1, 0.05),
+      slider('sfxVolume',    'SFX',    0, 1, 0.05),
+      slider('musicVolume',  'Music',  0, 0.3, 0.01),
+      slider('crowdVolume',  'Crowd',  0, 0.6, 0.02),
+      toggle('sfxMuted',     'Mute SFX'),
+      toggle('musicMuted',   'Mute Music'),
+    ]));
+    sections.appendChild(makeSection('CAMERA', [
+      slider('cameraSensitivity', 'Sensitivity', 0.001, 0.02, 0.001),
+      slider('fov',            'Field of View',     50, 100, 1),
+      slider('shoulderOffset', 'Shoulder Offset',   0,    5, 0.1),
+      slider('cameraPitch',    'Pitch',             0,  1.2, 0.05),
+      slider('cameraDistance', 'Distance',          3,   15, 0.25),
+      toggle('cameraInvertY',  'Invert Y'),
+      toggle('autoCenterCamera','Auto-center on point'),
+    ]));
+    sections.appendChild(makeSection('GRAPHICS', [
+      toggle('shadows',     'Shadows'),
+      toggle('bloom',       'Bloom (post)'),
+      toggle('particles',   'Particles'),
+      toggle('ballTrail',   'Ball Trail'),
+      toggle('showRadar',   'Mini-Map Radar'),
+      toggle('showLanding', 'Landing Marker'),
+      toggle('showCommentator','Commentary Banner'),
+    ]));
+    sections.appendChild(makeSection('GAMEPLAY', [
+      slider('moveSpeed',         'Move Speed Multiplier', 0.5, 2.0, 0.1),
+      slider('aiAggressiveness',  'AI Aggression',         0.5, 2.0, 0.1),
+      select('aiPersonality',     'AI Style', Object.keys(AIPersonalities)),
+      toggle('multiBall',         'Multi-Ball Chaos'),
+      toggle('powerUpsOn',        'Power-Ups'),
+      toggle('dayNightCycle',     'Day/Night Cycle'),
+      select('weatherEffect',     'Weather',    ['clear','rain','snow','fog']),
+      select('courtTheme',        'Court',      ['hard','clay','grass','night']),
+    ]));
+  }
+  function makeSection(title, rows){
+    const sec = document.createElement('div');
+    sec.style.cssText = 'border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:.7rem .8rem';
+    sec.innerHTML = '<div style="font-size:.7rem;color:#00b4ff;letter-spacing:.14em;margin-bottom:.5rem">' + title + '</div>';
+    rows.forEach(function(r){ sec.appendChild(r); });
+    return sec;
+  }
+  function slider(key, label, min, max, step){
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;font-size:.72rem';
+    row.innerHTML =
+      '<span style="color:#aabbcc">' + label + '</span>' +
+      '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + data[key] + '" ' +
+        'style="flex:1;max-width:180px;margin:0 .8rem"/>' +
+      '<span class="val" style="font-size:.66rem;color:#cdd9e6;width:50px;text-align:right">' + (Number.isInteger(data[key]) ? data[key] : Number(data[key]).toFixed(2)) + '</span>';
+    const inp = row.querySelector('input');
+    const val = row.querySelector('.val');
+    inp.addEventListener('input', function(e){
+      data[key] = parseFloat(e.target.value);
+      val.textContent = Number.isInteger(data[key]) ? data[key] : data[key].toFixed(2);
+      apply();
+    });
+    return row;
+  }
+  function toggle(key, label){
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;font-size:.72rem;cursor:pointer';
+    row.innerHTML =
+      '<span style="color:#aabbcc">' + label + '</span>' +
+      '<span class="tog" style="display:inline-block;width:36px;height:20px;border-radius:11px;' +
+      'background:' + (data[key] ? 'rgba(0,180,255,.35)' : '#222') + ';' +
+      'border:1px solid ' + (data[key] ? '#00b4ff' : '#333') + ';position:relative">' +
+        '<span style="position:absolute;top:1px;left:' + (data[key] ? '17px' : '1px') + ';' +
+        'width:16px;height:16px;border-radius:50%;background:' + (data[key] ? '#00b4ff' : '#888') + ';' +
+        'transition:left .15s,background .15s"></span>' +
+      '</span>';
+    row.onclick = function(){
+      AudioSys.click();
+      data[key] = !data[key];
+      apply();
+      render(); // re-render to update visual
+    };
+    return row;
+  }
+  function select(key, label, options){
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;font-size:.72rem';
+    let opts = '';
+    options.forEach(function(o){ opts += '<option value="' + o + '"' + (data[key] === o ? ' selected' : '') + '>' + o + '</option>'; });
+    row.innerHTML =
+      '<span style="color:#aabbcc">' + label + '</span>' +
+      '<select style="background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.12);' +
+        'border-radius:6px;padding:.3rem .5rem;font-family:Orbitron,sans-serif;font-size:.7rem">' + opts + '</select>';
+    const sel = row.querySelector('select');
+    sel.addEventListener('change', function(e){
+      data[key] = e.target.value;
+      apply();
+    });
+    return row;
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  function close(){
+    if (panel) panel.style.display = 'none';
+  }
+  load();
+  return { open: open, close: close, apply: apply, save: save, data: data };
+})();
+
+// ── Key Binding UI ─────────────────────────────────
+const KeyBindUI = (function(){
+  let panel = null;
+  const KEY = 'spike_tennis_keybinds_v1';
+  const bindings = {
+    moveLeft:  ['KeyA'],
+    moveRight: ['KeyD'],
+    moveUp:    ['KeyW'],
+    moveDown:  ['KeyS'],
+    jump:      ['ShiftLeft','KeyV'],
+    hit:       ['Space','KeyF'],
+    sprint:    ['ShiftLeft'],
+    abilityBoost:    ['Digit1'],
+    abilityPower:    ['Digit2'],
+    abilityLaserAim: ['Digit3'],
+    abilityTimeStop: ['Digit4'],
+    abilityMultiBall:['Digit5'],
+    pause:     ['Escape'],
+    chat:      ['KeyT'],
+    radar:     ['KeyM'],
+  };
+  function load(){
+    try { Object.assign(bindings, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(bindings)); } catch(_){}
+  }
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'kb-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(540px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.8rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em">KEY BINDINGS</h2>' +
+          '<div id="kb-list" style="display:flex;flex-direction:column;gap:.4rem;max-height:60vh;overflow-y:auto"></div>' +
+          '<button class="abtn" id="kb-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('kb-close').onclick = function(){ AudioSys.click(); save(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const list = document.getElementById('kb-list');
+    list.innerHTML = '';
+    for (const k in bindings){
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:.45rem .7rem;' +
+        'background:rgba(8,12,22,.5);border:1px solid rgba(255,255,255,.05);border-radius:8px;font-size:.72rem';
+      row.innerHTML =
+        '<span style="color:#aabbcc">' + k + '</span>' +
+        '<span style="color:#00b4ff;font-family:monospace;font-size:.66rem">' + bindings[k].join(' / ') + '</span>';
+      list.appendChild(row);
+    }
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  load();
+  return { open: open, bindings: bindings, save: save };
+})();
+
+// ── Heatmap visualization ──────────────────────────
+const HeatmapUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'heatmap-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(560px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,80,80,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#ff8080">📊 SHOT HEATMAP</h2>' +
+          '<canvas id="heat-canvas" width="400" height="280" style="margin:0 auto;background:rgba(8,12,22,.6);border-radius:8px"></canvas>' +
+          '<div style="font-size:.66rem;color:#aabbcc;text-align:center">Showing where YOUR shots have landed.</div>' +
+          '<button class="abtn" id="heat-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('heat-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const cv = document.getElementById('heat-canvas');
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    // Court outline
+    ctx.strokeStyle = '#00b4ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(20, 20, W-40, H-40);
+    ctx.beginPath();
+    ctx.moveTo(20, H/2);
+    ctx.lineTo(W-20, H/2);
+    ctx.stroke();
+    // Heat
+    const grid = ShotHistory.getHeatmap(0);
+    const maxCount = Math.max(1, Math.max.apply(null, grid.flat()));
+    for (let y=0; y<10; y++){
+      for (let x=0; x<10; x++){
+        const c = grid[y][x];
+        if (!c) continue;
+        const intensity = c / maxCount;
+        ctx.fillStyle = 'rgba(255,80,80,' + (0.2 + intensity * 0.6) + ')';
+        const cx = 20 + (x / 10) * (W - 40);
+        const cy = 20 + (y / 10) * (H - 40);
+        ctx.fillRect(cx, cy, (W-40)/10, (H-40)/10);
+      }
+    }
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Replay UI Panel (timeline scrubber) ─────────────
+const ReplayUI = (function(){
+  let panel = null;
+  let isOpen = false;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'replay-ui';
+    panel.style.cssText =
+      'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+      'background:rgba(5,8,15,.86);border:1px solid rgba(178,255,20,.3);' +
+      'border-radius:10px;padding:.6rem .9rem;display:none;z-index:90;' +
+      'font-family:Orbitron,sans-serif;color:#fff;width:min(420px,92vw)';
+    panel.innerHTML =
+      '<div style="display:flex;align-items:center;gap:.6rem">' +
+        '<button id="r-play" class="abtn" style="padding:.3rem .8rem;font-size:.7rem;width:auto">▶</button>' +
+        '<input id="r-scrub" type="range" min="0" max="100" value="0" style="flex:1"/>' +
+        '<button id="r-close" class="gbtn" style="padding:.3rem .6rem;font-size:.7rem;width:auto">×</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:.4rem;justify-content:center;margin-top:.4rem">' +
+        '<button id="r-slow" class="gbtn" style="font-size:.65rem;padding:.25rem .55rem;width:auto">SLOW-MO</button>' +
+        '<button id="r-rew" class="gbtn" style="font-size:.65rem;padding:.25rem .55rem;width:auto">⏮</button>' +
+        '<button id="r-fwd" class="gbtn" style="font-size:.65rem;padding:.25rem .55rem;width:auto">⏭</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('r-close').onclick = function(){ AudioSys.click(); close(); };
+    document.getElementById('r-play').onclick = function(){
+      AudioSys.click();
+      ReplaySys.startPlayback();
+    };
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    panel.style.display = 'block';
+    isOpen = true;
+  }
+  function close(){
+    if (panel) panel.style.display = 'none';
+    isOpen = false;
+    ReplaySys.stopPlayback();
+  }
+  function isVisible(){ return isOpen; }
+  return { open: open, close: close, isVisible: isVisible };
+})();
+
+// ── Match Log Panel ─────────────────────────────────
+const MatchLogUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'matchlog-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(560px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.6rem 1.4rem;width:100%;display:flex;flex-direction:column;gap:.7rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#00b4ff">📋 MATCH LOG</h2>' +
+          '<div id="ml-list" style="font-size:.74rem;display:flex;flex-direction:column;gap:.3rem;max-height:60vh;overflow-y:auto"></div>' +
+          '<button class="abtn" id="ml-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('ml-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const list = document.getElementById('ml-list');
+    list.innerHTML = '';
+    if (MatchLog.entries.length === 0){
+      list.innerHTML = '<div style="color:#7a8ba0;text-align:center;padding:1rem 0">No events recorded yet.</div>';
+      return;
+    }
+    MatchLog.entries.slice().reverse().forEach(function(e){
+      const row = document.createElement('div');
+      const colorBy = { info:'#cdd9e6', win:'#b2ff14', error:'#ff5050', special:'#ffdc32' };
+      row.style.cssText = 'padding:.4rem .5rem;border-left:3px solid ' + (colorBy[e.type] || '#cdd9e6') + ';' +
+        'background:rgba(8,12,22,.4);border-radius:0 6px 6px 0';
+      row.textContent = e.text;
+      list.appendChild(row);
+    });
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Pause Menu ───────────────────────────────────────
+const PauseMenu = (function(){
+  let panel = null;
+  let paused = false;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'pause-menu';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
+      'z-index:140;background:rgba(5,8,15,.85);backdrop-filter:blur(8px);' +
+      'font-family:Orbitron,sans-serif;color:#fff';
+    panel.innerHTML =
+      '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.4);border-radius:18px;' +
+      'padding:2rem 1.8rem;width:min(360px,92vw);display:flex;flex-direction:column;gap:.6rem">' +
+        '<h2 style="font-size:1.4rem;text-align:center;letter-spacing:.06em;margin-bottom:.4rem">⏸ PAUSED</h2>' +
+        '<button class="abtn" id="pm-resume">▶ RESUME</button>' +
+        '<button class="gbtn" id="pm-settings">⚙ SETTINGS</button>' +
+        '<button class="gbtn" id="pm-controls">⌨ CONTROLS</button>' +
+        '<button class="gbtn" id="pm-quit">🏠 QUIT TO LOBBY</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('pm-resume').onclick = function(){ AudioSys.click(); resume(); };
+    document.getElementById('pm-settings').onclick = function(){ AudioSys.click(); SettingsX.open(); };
+    document.getElementById('pm-controls').onclick = function(){ AudioSys.click(); KeyBindUI.open(); };
+    document.getElementById('pm-quit').onclick = function(){ AudioSys.click(); resume(); goLobby(); };
+  }
+  function pause(){
+    if (paused) return;
+    if (gPhase === 'lobby') return;
+    if (!panel) build();
+    paused = true;
+    panel.style.display = 'flex';
+    Music.setMode('silent');
+  }
+  function resume(){
+    if (!paused) return;
+    paused = false;
+    if (panel) panel.style.display = 'none';
+    Music.setMode('match');
+  }
+  function isPaused(){ return paused; }
+  function toggle(){ if (paused) resume(); else pause(); }
+  return { pause: pause, resume: resume, isPaused: isPaused, toggle: toggle };
+})();
+
+// ── Help / How to Play Panel ─────────────────────────
+const HelpUI = (function(){
+  let panel = null;
+  const sections = [
+    { title:'CONTROLS', body: [
+      'WASD or arrow keys — Move',
+      'LSHIFT or V — Jump',
+      'SPACE / CLICK / F — Hit / Serve',
+      'Q — Topspin (hold while hitting)',
+      'E — Slice (hold while hitting)',
+      'R — Lob (hold while hitting)',
+      'G — Flat / Hard (hold while hitting)',
+      '1-5 — Ability shortcuts',
+      'Right-click drag — Orbit camera',
+      'Mouse wheel — Zoom in/out',
+      'Esc — Pause menu',
+    ]},
+    { title:'SCORING', body: [
+      'Points: 0 → 15 → 30 → 40',
+      'Both at 40? → DEUCE',
+      'In deuce: win 2 in a row to take the GAME',
+      'First to 6 games (lead by 2) wins a SET',
+      'Best of 3 sets wins the MATCH',
+    ]},
+    { title:'SHOT TYPES', body: [
+      'Flat (default) — Balanced power',
+      'Topspin (Q) — Heavy arc, drops fast',
+      'Slice (E) — Low and skidding',
+      'Lob (R) — High lobbing shot',
+      'Smash — Auto on overhead while jumping',
+    ]},
+    { title:'GAME MODES', body: [
+      '1v1 vs AI — Solo against computer',
+      '1v1 Local — Two players, same screen',
+      '2v2 vs AI — Doubles match',
+      'Online — Host or join with a code',
+      'Practice — Hit targets for high score',
+      'Tournament — 5-round bracket',
+    ]},
+    { title:'TIPS', body: [
+      'Watch the meter and click in the green zone for a perfect serve.',
+      'Jump UP when ball is overhead → auto SMASH.',
+      'The landing marker shows where the ball will hit.',
+      'Power-ups respawn every ~12s when enabled.',
+      'Levels and unlocks persist across sessions.',
+    ]},
+  ];
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'help-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    let body = '';
+    sections.forEach(function(s){
+      body += '<div style="margin-bottom:1rem">' +
+        '<div style="font-size:.85rem;color:#00b4ff;margin-bottom:.4rem;letter-spacing:.1em">' + s.title + '</div>';
+      s.body.forEach(function(line){
+        body += '<div style="font-size:.7rem;color:#cdd9e6;padding:.18rem 0;line-height:1.6">' + line + '</div>';
+      });
+      body += '</div>';
+    });
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(620px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.5rem">' +
+          '<h2 style="font-size:1.3rem;text-align:center;letter-spacing:.06em">❓ HOW TO PLAY</h2>' +
+          '<div style="max-height:60vh;overflow-y:auto;padding:.4rem 0">' + body + '</div>' +
+          '<button class="abtn" id="help-close">GOT IT</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('help-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Credits Panel ────────────────────────────────────
+const CreditsUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'credits-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.97);backdrop-filter:blur(8px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:40px 16px;min-height:calc(100vh - 80px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(540px,94vw);font-family:Orbitron,sans-serif;color:#fff;text-align:center">' +
+        '<div style="font-size:clamp(1.8rem,5vw,3rem);font-weight:900;letter-spacing:.08em;' +
+          'background:linear-gradient(135deg,#fff,#00b4ff,#b2ff14);' +
+          '-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;' +
+          'margin-bottom:1rem">SPIKE TENNIS</div>' +
+        '<div style="font-size:.8rem;color:#aabbcc;margin-bottom:2rem">A 3D browser tennis game</div>' +
+        '<div style="display:flex;flex-direction:column;gap:1rem;font-size:.74rem;color:#cdd9e6">' +
+          '<div><span style="color:#00b4ff">DESIGN</span><br/>Rishik Sundar</div>' +
+          '<div><span style="color:#00b4ff">CODE</span><br/>Rishik with Claude</div>' +
+          '<div><span style="color:#00b4ff">3D ENGINE</span><br/>Three.js r128</div>' +
+          '<div><span style="color:#00b4ff">NETWORKING</span><br/>PeerJS</div>' +
+          '<div><span style="color:#00b4ff">FONTS</span><br/>Orbitron by Matt McInerney</div>' +
+          '<div><span style="color:#00b4ff">AUDIO</span><br/>100% synthesized via Web Audio API</div>' +
+        '</div>' +
+        '<div style="margin-top:2rem;font-size:.66rem;color:#637490">Made with 💙</div>' +
+        '<button class="abtn" id="credits-close" style="margin-top:1.5rem">CLOSE</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('credits-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Daily Challenges ─────────────────────────────────
+const DailyChallenges = (function(){
+  const KEY = 'spike_tennis_daily_v1';
+  const challenges = [
+    { id:'serve_5',     title:'Service Star',    desc:'Hit 5 perfect serves',                target:5,    type:'perfect_serve' },
+    { id:'smash_3',     title:'Smash Hero',      desc:'Land 3 smashes',                      target:3,    type:'smash' },
+    { id:'rally_15',    title:'Rally Time',      desc:'Reach a 15-shot rally',               target:15,   type:'rally' },
+    { id:'win_3',       title:'Triple Win',      desc:'Win 3 matches today',                 target:3,    type:'match_win' },
+    { id:'practice_300',title:'Practice Pro',    desc:'Score 300+ in any practice mode',     target:300,  type:'practice_score' },
+    { id:'ace_2',       title:'Double Ace',      desc:'Score 2 aces in one match',           target:2,    type:'ace' },
+    { id:'speed_180',   title:'Fast Server',     desc:'Hit a 180+ km/h serve',               target:180,  type:'serve_speed' },
+    { id:'play_3_courts',title:'Court Sampler',  desc:'Play on 3 different courts',          target:3,    type:'court_variety' },
+  ];
+  let active = [];
+  let date = '';
+  let progress = {};
+  function todayKey(){
+    const d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+  }
+  function load(){
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw){
+        const p = JSON.parse(raw);
+        if (p.date === todayKey()){
+          active = p.active;
+          progress = p.progress || {};
+        } else {
+          generateDaily();
+        }
+      } else {
+        generateDaily();
+      }
+    } catch(_){ generateDaily(); }
+  }
+  function generateDaily(){
+    date = todayKey();
+    const shuffled = challenges.slice().sort(function(){ return Math.random() - 0.5; });
+    active = shuffled.slice(0, 3);
+    progress = {};
+    save();
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify({ date: date, active: active, progress: progress })); } catch(_){}
+  }
+  function recordEvent(type, value){
+    active.forEach(function(c){
+      if (c.type === type){
+        if (type === 'serve_speed' || type === 'practice_score'){
+          if (value >= c.target && !progress[c.id]){
+            progress[c.id] = c.target;
+            complete(c);
+          }
+        } else if (type === 'court_variety'){
+          // value should be an array of court types played
+          progress[c.id] = (value || []).length;
+          if (progress[c.id] >= c.target) complete(c);
+        } else {
+          progress[c.id] = (progress[c.id] || 0) + (value || 1);
+          if (progress[c.id] >= c.target) complete(c);
+        }
+      }
+    });
+    save();
+  }
+  function complete(challenge){
+    if (progress[challenge.id + '_done']) return;
+    progress[challenge.id + '_done'] = true;
+    showMsg('🌟 DAILY: ' + challenge.title + ' — DONE!', 2500);
+    Profile.awardXP(75);
+    Shop.addCoins(150);
+    save();
+  }
+  function getActive(){ return active.slice(); }
+  function getProgress(id){ return progress[id] || 0; }
+  function isComplete(id){ return !!progress[id + '_done']; }
+  load();
+  return {
+    challenges: challenges,
+    getActive: getActive,
+    getProgress: getProgress,
+    isComplete: isComplete,
+    recordEvent: recordEvent,
+    generateDaily: generateDaily,
+  };
+})();
+
+// ── Daily Challenges UI ──────────────────────────────
+const DailyUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'daily-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(520px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,200,80,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.7rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#ffc850">📅 DAILY CHALLENGES</h2>' +
+          '<div id="daily-list" style="display:flex;flex-direction:column;gap:.55rem"></div>' +
+          '<div style="font-size:.68rem;color:#aabbcc;text-align:center">Resets at midnight. Reward: 75 XP + 150 coins each.</div>' +
+          '<button class="abtn" id="daily-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('daily-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const list = document.getElementById('daily-list');
+    list.innerHTML = '';
+    DailyChallenges.getActive().forEach(function(c){
+      const prog = DailyChallenges.getProgress(c.id);
+      const done = DailyChallenges.isComplete(c.id);
+      const pct = Math.min(100, Math.round(prog/c.target*100));
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:.6rem .8rem;border:1px solid ' + (done ? '#b2ff14' : 'rgba(255,255,255,.08)') + ';' +
+        'border-radius:8px;background:rgba(8,12,22,.5);display:flex;flex-direction:column;gap:.3rem';
+      row.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<span style="font-size:.78rem;font-weight:700;color:' + (done ? '#b2ff14' : '#fff') + '">' + (done ? '✓ ' : '') + c.title + '</span>' +
+          '<span style="font-size:.66rem;color:#aabbcc">' + prog + '/' + c.target + '</span>' +
+        '</div>' +
+        '<div style="font-size:.62rem;color:#7a8ba0">' + c.desc + '</div>' +
+        '<div style="height:5px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden">' +
+          '<div style="height:100%;width:' + pct + '%;background:' + (done ? '#b2ff14' : '#ffc850') + ';border-radius:3px"></div>' +
+        '</div>';
+      list.appendChild(row);
+    });
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Notifications System (toast queue) ────────────────
+const Notifications = (function(){
+  let queue = [];
+  let panel = null;
+  function ensure(){
+    if (panel) return;
+    panel = document.createElement('div');
+    panel.id = 'notif-stack';
+    panel.style.cssText =
+      'position:fixed;top:80px;right:14px;display:flex;flex-direction:column;gap:.4rem;' +
+      'z-index:115;pointer-events:none;font-family:Orbitron,sans-serif;color:#fff';
+    document.body.appendChild(panel);
+  }
+  function push(text, opts){
+    ensure();
+    opts = opts || {};
+    const el = document.createElement('div');
+    el.style.cssText =
+      'background:rgba(8,12,22,.94);border:1px solid ' + (opts.color || 'rgba(0,180,255,.35)') + ';' +
+      'border-radius:9px;padding:.55rem .85rem;font-size:.72rem;color:#cdd9e6;' +
+      'min-width:180px;max-width:280px;letter-spacing:.04em;' +
+      'box-shadow:0 4px 14px rgba(0,0,0,.4);transform:translateX(20px);opacity:0;' +
+      'transition:transform .3s,opacity .3s';
+    el.textContent = text;
+    panel.appendChild(el);
+    setTimeout(function(){ el.style.transform = 'translateX(0)'; el.style.opacity = '1'; }, 10);
+    const dur = opts.duration || 3500;
+    setTimeout(function(){
+      el.style.opacity = '0'; el.style.transform = 'translateX(20px)';
+      setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 350);
+    }, dur);
+  }
+  return { push: push };
+})();
+
+// ── Match Variant Modes ──────────────────────────────
+const MatchVariants = {
+  classic:    { name:'Classic',         setsToWin:2, gamesPerSet:6, tiebreakAt:6, deuce:true },
+  short:      { name:'Quick Match',     setsToWin:1, gamesPerSet:4, tiebreakAt:4, deuce:false },
+  pro:        { name:'Pro Match',       setsToWin:3, gamesPerSet:6, tiebreakAt:6, deuce:true },
+  shootout:   { name:'Shootout',        setsToWin:1, gamesPerSet:1, tiebreakAt:1, deuce:false },
+  marathon:   { name:'Marathon',        setsToWin:3, gamesPerSet:8, tiebreakAt:8, deuce:true },
+  goldenSet:  { name:'Golden Set',      setsToWin:1, gamesPerSet:6, tiebreakAt:6, deuce:false },
+};
+let activeVariant = 'classic';
+function setVariant(name){
+  if (MatchVariants[name]) activeVariant = name;
+}
+function getVariant(){ return MatchVariants[activeVariant] || MatchVariants.classic; }
+
+// ── Wind effect (affects ball trajectory horizontally) ────
+const Wind = (function(){
+  let strength = 0;          // 0..1
+  let direction = 0;          // angle in radians (0 = +x)
+  let enabled = false;
+  function setEnabled(on){ enabled = !!on; }
+  function setRandom(){
+    strength = Math.random() * 0.6;
+    direction = Math.random() * Math.PI * 2;
+  }
+  function applyToBall(b, dt){
+    if (!enabled) return;
+    const fx = Math.cos(direction) * strength * 1.2;
+    const fz = Math.sin(direction) * strength * 1.2;
+    b.vel.x += fx * dt;
+    b.vel.z += fz * dt;
+  }
+  function getInfo(){
+    return { strength: strength, direction: direction, enabled: enabled };
+  }
+  function describe(){
+    if (!enabled) return 'No wind';
+    const dirs = ['E','NE','N','NW','W','SW','S','SE'];
+    const ix = Math.round(direction / (Math.PI/4)) % 8;
+    const sStr = strength < 0.2 ? 'Light' : strength < 0.5 ? 'Moderate' : 'Strong';
+    return sStr + ' wind from ' + dirs[ix];
+  }
+  return { setEnabled: setEnabled, setRandom: setRandom, applyToBall: applyToBall, getInfo: getInfo, describe: describe };
+})();
+
+// ── Trick Shots / Special Moves ────────────────────────
+const TrickShots = {
+  tweener: {
+    name: 'Tweener',
+    desc: 'Between-the-legs shot',
+    requirement: 'Hit while running backwards from ball',
+    powerMult: 0.85,
+    accuracyPenalty: 0.5,
+    coolFactor: 5,
+  },
+  banana: {
+    name: 'Banana Shot',
+    desc: 'Wide curving forehand',
+    requirement: 'Hit slice while ball is wide',
+    powerMult: 0.9,
+    accuracyPenalty: 0.3,
+    coolFactor: 3,
+  },
+  scoop: {
+    name: 'Scoop Volley',
+    desc: 'Soft-handed defensive volley',
+    requirement: 'Volley low ball at the net',
+    powerMult: 0.6,
+    accuracyPenalty: -0.2,
+    coolFactor: 2,
+  },
+  drop: {
+    name: 'Drop Shot',
+    desc: 'Short, low-spin ball',
+    requirement: 'Hit slice with light touch',
+    powerMult: 0.4,
+    accuracyPenalty: 0.1,
+    coolFactor: 4,
+  },
+  insideOut: {
+    name: 'Inside-Out Forehand',
+    desc: 'Cross-court forehand on backhand side',
+    requirement: 'Hit forehand while on backhand wing',
+    powerMult: 1.05,
+    accuracyPenalty: 0.2,
+    coolFactor: 3,
+  },
+  drive: {
+    name: 'Power Drive',
+    desc: 'Maximum-speed flat hit',
+    requirement: 'Perfect timing on flat shot',
+    powerMult: 1.4,
+    accuracyPenalty: 0.4,
+    coolFactor: 4,
+  },
+};
+
+// ── Ranked / ELO Tracking ──────────────────────────────
+const RankedSys = (function(){
+  const KEY = 'spike_tennis_ranked_v1';
+  const data = {
+    rating: 1000,
+    rank: 'Bronze',
+    wins: 0, losses: 0,
+    streak: 0, bestStreak: 0,
+  };
+  function load(){
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) Object.assign(data, JSON.parse(raw));
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch(_){}
+  }
+  function calculateRank(rating){
+    if (rating >= 2400) return 'Grandmaster';
+    if (rating >= 2100) return 'Master';
+    if (rating >= 1800) return 'Diamond';
+    if (rating >= 1500) return 'Platinum';
+    if (rating >= 1200) return 'Gold';
+    if (rating >= 1000) return 'Silver';
+    return 'Bronze';
+  }
+  function recordResult(opponentRating, won, gameDifficulty){
+    // Standard ELO-like adjustment
+    const k = won ? 32 : 24;
+    const expected = 1 / (1 + Math.pow(10, (opponentRating - data.rating)/400));
+    const score = won ? 1 : 0;
+    let delta = Math.round(k * (score - expected));
+    if (gameDifficulty === 'hard') delta *= 1.5;
+    else if (gameDifficulty === 'easy') delta *= 0.7;
+    data.rating += Math.round(delta);
+    data.rank = calculateRank(data.rating);
+    if (won){
+      data.wins++; data.streak++;
+      if (data.streak > data.bestStreak) data.bestStreak = data.streak;
+    } else {
+      data.losses++; data.streak = 0;
+    }
+    save();
+    return { delta: delta, newRating: data.rating };
+  }
+  function reset(){
+    data.rating = 1000; data.rank = 'Bronze';
+    data.wins = 0; data.losses = 0; data.streak = 0; data.bestStreak = 0;
+    save();
+  }
+  load();
+  return { data: data, recordResult: recordResult, reset: reset, calculateRank: calculateRank };
+})();
+
+// ── Ranked UI ──────────────────────────────────────────
+const RankedUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'ranked-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(440px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,180,80,.35);border-radius:18px;' +
+        'padding:1.8rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.3rem;text-align:center;letter-spacing:.06em;color:#ffb450">📊 RANKED</h2>' +
+          '<div id="ranked-card" style="display:flex;flex-direction:column;gap:.6rem;text-align:center"></div>' +
+          '<button class="abtn" id="ranked-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('ranked-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const card = document.getElementById('ranked-card');
+    const wr = RankedSys.data.wins + RankedSys.data.losses > 0
+      ? Math.round(RankedSys.data.wins / (RankedSys.data.wins + RankedSys.data.losses) * 100) : 0;
+    const rankColors = {
+      Bronze: '#cd7f32', Silver: '#c0c0c0', Gold: '#ffd700',
+      Platinum: '#e5e4e2', Diamond: '#b9f2ff', Master: '#ff7575',
+      Grandmaster: '#ff00ff'
+    };
+    card.innerHTML =
+      '<div style="font-size:2.2rem;font-weight:900;color:' + (rankColors[RankedSys.data.rank] || '#fff') + ';' +
+        'text-shadow:0 0 24px ' + (rankColors[RankedSys.data.rank] || '#fff') + '88">' + RankedSys.data.rank + '</div>' +
+      '<div style="font-size:1.6rem;font-weight:700">' + RankedSys.data.rating + ' <span style="font-size:.8rem;color:#aabbcc">ELO</span></div>' +
+      '<div style="font-size:.78rem;color:#aabbcc">' + RankedSys.data.wins + 'W · ' + RankedSys.data.losses + 'L (' + wr + '%)</div>' +
+      '<div style="font-size:.7rem;color:#7a8ba0">Streak: ' + RankedSys.data.streak + ' · Best: ' + RankedSys.data.bestStreak + '</div>';
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Match History (records last N matches) ────────────
+const MatchHistory = (function(){
+  const KEY = 'spike_tennis_history_v1';
+  let entries = [];
+  function load(){
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) entries = JSON.parse(raw);
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch(_){}
+  }
+  function record(result){
+    const entry = {
+      time: Date.now(),
+      mode: gMode,
+      difficulty: difficulty,
+      theme: activeTheme,
+      won: result.won,
+      sets: [SC.sets[0], SC.sets[1]],
+      games: [SC.games[0], SC.games[1]],
+      stats: {
+        aces: STATS.aces.slice(),
+        winners: STATS.winners.slice(),
+        errors: STATS.errors.slice(),
+        smashes: STATS.totalSmashes.slice(),
+        fastestServe: STATS.fastestServeKmh.slice(),
+        longestRally: STATS.longestRally,
+      }
+    };
+    entries.unshift(entry);
+    if (entries.length > 30) entries.pop();
+    save();
+  }
+  function getAll(){ return entries.slice(); }
+  function clear(){ entries = []; save(); }
+  load();
+  return { record: record, getAll: getAll, clear: clear, entries: entries };
+})();
+
+// ── Match History UI ───────────────────────────────────
+const MatchHistoryUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'history-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(580px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.8rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#00b4ff">📜 MATCH HISTORY</h2>' +
+          '<div id="hist-list" style="display:flex;flex-direction:column;gap:.4rem;max-height:60vh;overflow-y:auto"></div>' +
+          '<button class="abtn" id="hist-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('hist-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const list = document.getElementById('hist-list');
+    const all = MatchHistory.getAll();
+    if (all.length === 0){
+      list.innerHTML = '<div style="color:#7a8ba0;text-align:center;padding:1rem 0">No matches recorded yet.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    all.forEach(function(e){
+      const row = document.createElement('div');
+      const winColor = e.won ? '#b2ff14' : '#ff5050';
+      row.style.cssText = 'padding:.55rem .8rem;background:rgba(8,12,22,.5);' +
+        'border-left:4px solid ' + winColor + ';border-radius:0 8px 8px 0;font-size:.72rem;' +
+        'display:flex;justify-content:space-between;align-items:center';
+      const date = new Date(e.time);
+      const dateStr = date.toLocaleString();
+      row.innerHTML =
+        '<div>' +
+          '<div style="font-weight:700;color:' + winColor + '">' + (e.won ? 'WON' : 'LOST') + ' · ' + e.mode + '</div>' +
+          '<div style="color:#7a8ba0;font-size:.62rem">' + dateStr + ' · ' + (e.difficulty || 'medium') + ' · ' + e.theme + '</div>' +
+        '</div>' +
+        '<div style="text-align:right;color:#cdd9e6">' +
+          'Sets ' + e.sets[0] + '–' + e.sets[1] +
+        '</div>';
+      list.appendChild(row);
+    });
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── AI Personality Picker UI ───────────────────────────
+const AIPickerUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'ai-picker-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(560px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(160,80,255,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.8rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#a050ff">🤖 AI STYLE</h2>' +
+          '<div id="ai-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.55rem"></div>' +
+          '<button class="abtn" id="ai-close">CONFIRM</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('ai-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const grid = document.getElementById('ai-grid');
+    grid.innerHTML = '';
+    for (const k in AIPersonalities){
+      const p = AIPersonalities[k];
+      const isActive = aiPersonality === k;
+      const card = document.createElement('div');
+      card.style.cssText = 'padding:.7rem .55rem;border:1.5px solid ' + (isActive ? '#a050ff' : 'rgba(255,255,255,.07)') + ';' +
+        'border-radius:10px;cursor:pointer;background:rgba(12,18,32,.6);text-align:center';
+      card.innerHTML =
+        '<div style="font-size:.84rem;font-weight:700;color:' + (isActive ? '#a050ff' : '#fff') + '">' + p.name + '</div>' +
+        '<div style="font-size:.62rem;color:#7a8ba0;line-height:1.5;margin-top:.3rem">' + p.description + '</div>';
+      card.onclick = function(){
+        AudioSys.click();
+        setAIPersonality(k);
+        render();
+      };
+      grid.appendChild(card);
+    }
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Replay Export / Import (JSON) ──────────────────────
+const ReplayIO = (function(){
+  function exportToJson(){
+    const buf = ReplaySys.bufferSize() > 0 ? 'buffer' : 'empty';
+    return {
+      version: 1,
+      time: Date.now(),
+      mode: gMode,
+      score: { sets: SC.sets, games: SC.games },
+      buffer: buf,
+    };
+  }
+  function downloadAsFile(){
+    const data = exportToJson();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'spike_replay_' + Date.now() + '.json';
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 100);
+  }
+  return { exportToJson: exportToJson, downloadAsFile: downloadAsFile };
+})();
+
+// ── Decoration: floating banner advertisements (rotate text) ────
+const FloatingBanners = (function(){
+  const banners = [];
+  const messages = [
+    'SPIKE TENNIS', 'POWER UP YOUR GAME',
+    'NEON COURT', 'PRO LEVEL', 'TOURNAMENT NIGHT',
+    'GET RANKED', 'COSMIC SERVE', 'GO PRO',
+    'COURT KING', 'ELITE PLAY', 'GRAND SLAM',
+  ];
+  function build(){
+    if (banners.length) return;
+    for (let i=0; i<6; i++){
+      const canvas = document.createElement('canvas');
+      canvas.width = 512; canvas.height = 96;
+      const ctx = canvas.getContext('2d');
+      drawBannerText(ctx, messages[i % messages.length], i);
+      const tex = new THREE.CanvasTexture(canvas);
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+      const w = 6, h = 1.1;
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+      const angle = (i / 6) * Math.PI * 2;
+      banner.position.set(Math.cos(angle) * 24, 6 + (i % 2) * 0.5, Math.sin(angle) * 24);
+      banner.lookAt(0, 6, 0);
+      scene.add(banner);
+      banners.push({ mesh: banner, tex: tex, ctx: ctx, canvas: canvas, msg: messages[i % messages.length], idx: i });
+    }
+  }
+  function drawBannerText(ctx, msg, colorSeed){
+    const colors = ['#00b4ff','#ff5050','#b2ff14','#ffdc32','#a050ff','#ff8090'];
+    ctx.fillStyle = '#0a0a14';
+    ctx.fillRect(0, 0, 512, 96);
+    ctx.strokeStyle = colors[colorSeed % colors.length];
+    ctx.lineWidth = 6;
+    ctx.strokeRect(8, 8, 496, 80);
+    ctx.fillStyle = colors[colorSeed % colors.length];
+    ctx.font = 'bold 56px Orbitron, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(msg, 256, 50);
+  }
+  function rotate(){
+    banners.forEach(function(b, i){
+      b.idx = (b.idx + 1) % messages.length;
+      b.msg = messages[b.idx];
+      drawBannerText(b.ctx, b.msg, b.idx);
+      b.tex.needsUpdate = true;
+    });
+  }
+  return { build: build, rotate: rotate, banners: banners };
+})();
+
+// ── Lobby music handler (auto-play in lobby, switch in match) ──
+function handleMusicForPhase(){
+  if (gPhase === 'lobby'){
+    Music.setMode('lobby');
+  } else if (gPhase === 'match_over'){
+    Music.setMode('victory');
+  } else if (gPhase === 'point_end' || gPhase === 'serve_meter' || gPhase === 'serve_toss'){
+    Music.setMode('match');
+  } else if (gPhase === 'rally'){
+    // Keep music going from previous phase; could detect tense moments
+    if (SC.deuce) Music.setMode('tense');
+    else Music.setMode('match');
+  }
+}
+
+// ── Camera Lerps & Smooth Camera Transitions ──────────
+const CameraTransitions = (function(){
+  let transTime = 0;
+  let transDuration = 0;
+  let from = null, to = null;
+  function startTransition(targetState, duration){
+    transDuration = duration || 1.0;
+    transTime = 0;
+    from = { yaw: CAM.yaw, pitch: CAM.pitch, dist: CAM.dist, shoulder: CAM.shoulder };
+    to = Object.assign({}, targetState);
+  }
+  function update(dt){
+    if (transTime < transDuration && to){
+      transTime += dt;
+      const t = Math.min(1, transTime / transDuration);
+      const e = t * t * (3 - 2 * t); // smoothstep
+      if (to.yaw != null)      CAM.yaw      = from.yaw      + (to.yaw      - from.yaw)      * e;
+      if (to.pitch != null)    CAM.pitch    = from.pitch    + (to.pitch    - from.pitch)    * e;
+      if (to.dist != null)     CAM.dist     = from.dist     + (to.dist     - from.dist)     * e;
+      if (to.shoulder != null) CAM.shoulder = from.shoulder + (to.shoulder - from.shoulder) * e;
+      if (t >= 1){ to = null; }
+    }
+  }
+  // Preset cameras
+  const presets = {
+    default:  { yaw:0,    pitch:0.45, dist:8.0, shoulder:2.4 },
+    closeup:  { yaw:0,    pitch:0.30, dist:5.0, shoulder:1.8 },
+    overhead: { yaw:0,    pitch:1.10, dist:14.0, shoulder:0.0 },
+    side:     { yaw:1.57, pitch:0.20, dist:9.0, shoulder:0.0 },
+    cinema:   { yaw:0.6,  pitch:0.30, dist:10.0, shoulder:0.0 },
+  };
+  function setPreset(name, duration){
+    const p = presets[name];
+    if (p) startTransition(p, duration || 1.2);
+  }
+  return { update: update, setPreset: setPreset, startTransition: startTransition, presets: presets };
+})();
+
+// ── Confetti effect (for big wins) ─────────────────────
+const Confetti = (function(){
+  const particles = [];
+  const POOL = 40;
+  let initialized = false;
+  function init(){
+    if (initialized) return;
+    initialized = true;
+    const colors = [0xff5050, 0x00b4ff, 0xb2ff14, 0xa050ff, 0xffdc32];
+    for (let i=0; i<POOL; i++){
+      const mat = new THREE.MeshBasicMaterial({ color: colors[i % colors.length], transparent: true, opacity: 1 });
+      const geo = new THREE.PlaneGeometry(0.18, 0.30);
+      const m = new THREE.Mesh(geo, mat);
+      m.visible = false;
+      scene.add(m);
+      particles.push({ mesh: m, vx:0, vy:0, vz:0, vrot:0, life:0 });
+    }
+  }
+  function burst(x, y, z, count){
+    init();
+    count = count || 25;
+    let spawned = 0;
+    for (let i=0; i<particles.length && spawned < count; i++){
+      const p = particles[i];
+      if (p.mesh.visible) continue;
+      p.mesh.position.set(x, y, z);
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 4 + Math.random() * 6;
+      p.vx = Math.cos(ang) * sp;
+      p.vz = Math.sin(ang) * sp;
+      p.vy = 5 + Math.random() * 5;
+      p.vrot = (Math.random() - 0.5) * 6;
+      p.life = 2.5 + Math.random();
+      p.mesh.material.opacity = 1;
+      p.mesh.visible = true;
+      spawned++;
+    }
+  }
+  function update(dt){
+    particles.forEach(function(p){
+      if (!p.mesh.visible) return;
+      p.life -= dt;
+      if (p.life <= 0){ p.mesh.visible = false; return; }
+      p.vy -= 9 * dt;
+      p.mesh.position.x += p.vx * dt;
+      p.mesh.position.y += p.vy * dt;
+      p.mesh.position.z += p.vz * dt;
+      p.mesh.rotation.x += p.vrot * dt;
+      p.mesh.rotation.z += p.vrot * 0.5 * dt;
+      if (p.mesh.position.y < 0){
+        p.mesh.position.y = 0;
+        p.vy = -p.vy * 0.3;
+        p.vx *= 0.6; p.vz *= 0.6;
+      }
+      p.mesh.material.opacity = Math.min(1, p.life * 0.6);
+    });
+  }
+  return { burst: burst, update: update };
+})();
+
+// ── Floating XP popups ─────────────────────────────────
+const XPPopups = (function(){
+  const active = [];
+  function spawn(text, color){
+    color = color || '#b2ff14';
+    const el = document.createElement('div');
+    el.style.cssText =
+      'position:fixed;left:50%;top:60%;transform:translateX(-50%) translateY(0);' +
+      'font-family:Orbitron,sans-serif;font-weight:700;font-size:1rem;' +
+      'color:' + color + ';text-shadow:0 0 14px ' + color + 'aa;' +
+      'pointer-events:none;z-index:90;transition:transform 1.4s ease-out,opacity 1.4s';
+    el.textContent = text;
+    document.body.appendChild(el);
+    setTimeout(function(){
+      el.style.transform = 'translateX(-50%) translateY(-90px)';
+      el.style.opacity = '0';
+    }, 30);
+    setTimeout(function(){
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, 1500);
+    active.push(el);
+  }
+  return { spawn: spawn };
+})();
+
+// ── Spectator mode (camera that flies around the court) ──
+const SpectatorCam = (function(){
+  let active = false;
+  let t = 0;
+  function setActive(on){
+    active = !!on;
+    if (active) t = 0;
+  }
+  function update(dt){
+    if (!active) return;
+    t += dt * 0.2;
+    CAM.yaw = t;
+    CAM.pitch = 0.45 + Math.sin(t * 0.5) * 0.15;
+    CAM.dist = 12 + Math.cos(t * 0.3) * 2;
+  }
+  return { setActive: setActive, update: update };
+})();
+
+// ── Net animation when ball hits ───────────────────────
+const NetSway = (function(){
+  let swayT = 0;
+  let swayMag = 0;
+  function trigger(magnitude){
+    swayT = 0.5;
+    swayMag = magnitude || 0.2;
+  }
+  function update(dt){
+    swayT = Math.max(0, swayT - dt);
+  }
+  function getOffset(){
+    if (swayT <= 0) return 0;
+    return Math.sin(swayT * 18) * swayMag * (swayT / 0.5);
+  }
+  return { trigger: trigger, update: update, getOffset: getOffset };
+})();
+
+// ── Damage / Cracks on Surface (visual only) ──────────
+const SurfaceWear = (function(){
+  const decals = [];
+  const POOL = 20;
+  let initialized = false;
+  function init(){
+    if (initialized) return;
+    initialized = true;
+    const geo = new THREE.PlaneGeometry(0.6, 0.6);
+    for (let i=0; i<POOL; i++){
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x000000, transparent: true, opacity: 0
+      });
+      const m = new THREE.Mesh(geo, mat);
+      m.rotation.x = -Math.PI/2;
+      m.position.y = 0.013;
+      m.visible = false;
+      scene.add(m);
+      decals.push({ mesh: m, life: 0 });
+    }
+  }
+  function add(x, z){
+    init();
+    const free = decals.find(function(d){ return !d.mesh.visible; });
+    if (!free) return;
+    free.mesh.position.set(x, 0.013, z);
+    free.mesh.material.opacity = 0.25;
+    free.mesh.visible = true;
+    free.life = 30;
+  }
+  function update(dt){
+    decals.forEach(function(d){
+      if (!d.mesh.visible) return;
+      d.life -= dt;
+      if (d.life <= 0){ d.mesh.visible = false; }
+    });
+  }
+  return { add: add, update: update };
+})();
+
+// ── Volume mixer per channel ──────────────────────────
+const VolumeMixer = {
+  master: 1.0, sfx: 1.0, music: 1.0, crowd: 1.0, ui: 1.0,
+  apply: function(){
+    AudioSys.setCrowdVolume(this.crowd * 0.18);
+  }
+};
+
+// ── Trail Variants ──────────────────────────────────
+const TrailVariants = {
+  default:   { count:14, color:0xb2ff14, glow:0x446600, opacity:0.65 },
+  rainbow:   { count:18, colors:[0xff5050, 0xff9632, 0xffe800, 0x60ff80, 0x00b4ff, 0xa050ff], opacity:0.72 },
+  smoke:     { count:20, color:0xaaaaaa, glow:0x666666, opacity:0.4 },
+  lightning: { count:10, color:0xffffff, glow:0xffff80, opacity:0.85 },
+  petals:    { count:16, color:0xffaaaa, glow:0xff8888, opacity:0.7 },
+  fire:      { count:14, color:0xff5510, glow:0xff8030, opacity:0.8 },
+  ice:       { count:16, color:0x90e0ff, glow:0x70b0ff, opacity:0.6 },
+  galaxy:    { count:18, colors:[0x000033, 0x4040ff, 0xa0a0ff, 0xffffff], opacity:0.7 },
+};
+let activeTrail = 'default';
+function setTrail(name){
+  if (TrailVariants[name]) activeTrail = name;
+}
+
+// ── Easter Egg Codes (Konami-style sequences) ────────
+const EasterEggs = (function(){
+  const codes = {
+    konami: ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','KeyB','KeyA'],
+    rocket: ['KeyR','KeyO','KeyC','KeyK','KeyE','KeyT'],
+    coins:  ['KeyM','KeyO','KeyN','KeyE','KeyY'],
+    rainbow:['KeyR','KeyA','KeyI','KeyN','KeyB','KeyO','KeyW'],
+  };
+  let buffer = [];
+  function record(code){
+    buffer.push(code);
+    if (buffer.length > 10) buffer.shift();
+    for (const k in codes){
+      const seq = codes[k];
+      if (buffer.length >= seq.length){
+        const tail = buffer.slice(-seq.length);
+        if (tail.every(function(c, i){ return c === seq[i]; })){
+          activate(k);
+          buffer = [];
+        }
+      }
+    }
+  }
+  function activate(name){
+    if (name === 'konami'){
+      Profile.awardXP(500);
+      Shop.addCoins(1000);
+      showMsg('🎉 KONAMI CODE! +500 XP, +1000 coins', 3000);
+      Confetti.burst(0, 0.5, 0, 60);
+      AudioSys.fanfare();
+    } else if (name === 'rocket'){
+      // Crazy serve speed
+      showMsg('🚀 ROCKET MODE — serve speeds DOUBLED!', 3000);
+      Sounds.unlock();
+    } else if (name === 'coins'){
+      Shop.addCoins(500);
+      showMsg('🪙 +500 coins!', 2000);
+    } else if (name === 'rainbow'){
+      setTrail('rainbow');
+      showMsg('🌈 Rainbow trail unlocked!', 2500);
+    }
+  }
+  return { record: record, codes: codes };
+})();
+
+// ── Detailed Match Commentary Database ─────────────
+const CommentaryDB = {
+  greetings: [
+    'Welcome to centre court for an exciting match!',
+    'The crowd is buzzing here today.',
+    'Anticipation building as the players take their positions.',
+    'It\'s time for some tennis!',
+  ],
+  matchStart: [
+    'And we\'re underway!',
+    'Off we go!',
+    'First serve coming up.',
+    'And it begins!',
+  ],
+  closeMatch: [
+    'This is going down to the wire.',
+    'You can cut the tension with a knife.',
+    'Neither player willing to give an inch.',
+    'A real heavyweight battle developing.',
+    'Both players at their absolute best.',
+  ],
+  pressurePoint: [
+    'Massive point coming up.',
+    'Game-defining moment here.',
+    'You don\'t want to lose this one.',
+    'Pressure cooker situation.',
+    'This point could change everything.',
+  ],
+  excellentShot: [
+    'Outstanding!',
+    'Incredible shot!',
+    'How did they hit that?!',
+    'Genius!',
+    'Pure class!',
+    'Exhibition stuff!',
+    'You can\'t coach that!',
+  ],
+  averageShot: [
+    'Solid response.',
+    'Decent shot.',
+    'Keeps the rally going.',
+    'Workmanlike.',
+    'Gets the job done.',
+  ],
+  poorShot: [
+    'Frustrating error.',
+    'They\'ll regret that.',
+    'Poor execution.',
+    'Cheap point given away.',
+    'Lapse in concentration.',
+  ],
+  comeback: [
+    'Stunning comeback!',
+    'Refused to give up!',
+    'What a fightback!',
+    'Found another gear.',
+    'Heart of a champion!',
+  ],
+  domination: [
+    'Total domination.',
+    'Class showing through.',
+    'Putting on a clinic.',
+    'Making it look easy.',
+    'No answer to this.',
+  ],
+};
+
+// ── Stats: Match-by-Match Tracker (running totals) ──
+const RunningStats = (function(){
+  const totals = {
+    matchesPlayed: 0,
+    setsPlayed: 0,
+    gamesPlayed: 0,
+    pointsPlayed: 0,
+    minutesPlayed: 0,
+    aces: 0, smashes: 0, winners: 0, errors: 0,
+    longestRallySeen: 0,
+    fastestServeSeen: 0,
+    coinsEarned: 0,
+    xpEarned: 0,
+  };
+  function load(){
+    try {
+      const raw = localStorage.getItem('spike_tennis_running_v1');
+      if (raw) Object.assign(totals, JSON.parse(raw));
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem('spike_tennis_running_v1', JSON.stringify(totals)); } catch(_){}
+  }
+  function inc(key, amount){
+    if (!totals[key]) totals[key] = 0;
+    totals[key] += (amount == null ? 1 : amount);
+    save();
+  }
+  function setIfBetter(key, value){
+    if (!totals[key] || value > totals[key]){
+      totals[key] = value;
+      save();
+    }
+  }
+  load();
+  return { totals: totals, inc: inc, setIfBetter: setIfBetter, save: save };
+})();
+
+// ── Session Timing ─────────────────────────────────
+const SessionTimer = (function(){
+  const sessionStart = Date.now();
+  let lastUpdate = sessionStart;
+  function getElapsed(){
+    return Date.now() - sessionStart;
+  }
+  function tick(){
+    const now = Date.now();
+    const dt = now - lastUpdate;
+    lastUpdate = now;
+    Profile.data.totalPlayTime += dt;
+    return dt;
+  }
+  return { getElapsed: getElapsed, tick: tick };
+})();
+
+// ── Coin earning rules per event ───────────────────
+const CoinRewards = {
+  perPoint: 1,
+  perGame: 5,
+  perSet: 25,
+  perMatchWin: 100,
+  perAce: 5,
+  perSmash: 3,
+  perRally10: 10,
+  perTournamentWin: 500,
+  perPracticeBest: 50,
+  perDailyChallenge: 150,
+};
+function awardCoins(amount, reason){
+  Shop.addCoins(amount);
+  Notifications.push('+' + amount + ' coins (' + reason + ')', { color:'rgba(255,215,0,.5)' });
+  RunningStats.inc('coinsEarned', amount);
+}
+
+// ── XP earning rules ───────────────────────────────
+const XPRewards = {
+  perPoint: 2,
+  perGame: 10,
+  perSet: 30,
+  perMatchWin: 150,
+  perAce: 25,
+  perSmash: 8,
+  perRally10: 10,
+  perTournamentWin: 300,
+  perPracticeBest: 40,
+  perDailyChallenge: 75,
+};
+
+// ── Misc helper utilities ──────────────────────────
+function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, t){ return a + (b - a) * t; }
+function randRange(lo, hi){ return lo + Math.random() * (hi - lo); }
+function pickRandom(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
+function distance2D(x1, z1, x2, z2){ const dx=x1-x2, dz=z1-z2; return Math.sqrt(dx*dx+dz*dz); }
+function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+function smoothstep(t){ return t * t * (3 - 2 * t); }
+function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
+function easeInCubic(t){ return t * t * t; }
+function easeInOutCubic(t){ return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2; }
+function easeOutBack(t){
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+// ── Crowd Reactions (different reactions per situation) ─────
+const CrowdReactions = (function(){
+  const reactions = {
+    silent:    { volume: 0, comment: '' },
+    murmur:    { volume: 0.18, comment: 'Crowd murmur' },
+    interest:  { volume: 0.30, comment: 'Crowd attentive' },
+    excited:   { volume: 0.55, comment: 'Crowd excited!' },
+    cheer:     { volume: 0.75, comment: 'Crowd cheering!' },
+    standOvation:{ volume: 0.95, comment: 'STANDING OVATION!' },
+    boo:       { volume: 0.45, comment: 'Crowd booing' },
+  };
+  let currentLevel = 'murmur';
+  function setLevel(level){
+    if (!reactions[level]) return;
+    currentLevel = level;
+    AudioSys.setCrowdVolume(SETTINGS && SETTINGS.muted ? 0 : reactions[level].volume * (SETTINGS && SETTINGS.crowdLevel != null ? SETTINGS.crowdLevel * 5 : 1));
+  }
+  function reactToEvent(event){
+    if (event === 'point_won_p1') setLevel('cheer');
+    else if (event === 'point_won_p2') setLevel('boo');
+    else if (event === 'long_rally') setLevel('excited');
+    else if (event === 'smash_winner') setLevel('cheer');
+    else if (event === 'ace') setLevel('excited');
+    else if (event === 'set_won') setLevel('cheer');
+    else if (event === 'match_won') setLevel('standOvation');
+    setTimeout(function(){ setLevel('murmur'); }, 2500);
+  }
+  function getCurrent(){ return currentLevel; }
+  return { setLevel: setLevel, reactToEvent: reactToEvent, getCurrent: getCurrent };
+})();
+
+// ── Difficulty Modifiers (adjustable per-game) ─────
+const DifficultyMods = (function(){
+  const mods = {
+    aiSpeedMult: 1.0,
+    aiAccuracyMult: 1.0,
+    aiPowerMult: 1.0,
+    aiReactionMult: 1.0,
+    playerSpeedMult: 1.0,
+    playerHitRangeMult: 1.0,
+    serveSpeedMult: 1.0,
+    ballSpeedMult: 1.0,
+    gravityMult: 1.0,
+  };
+  function applyToAI(personality){
+    return Object.assign({}, personality, {
+      spdMult: (personality.spdMult || 1) * mods.aiSpeedMult,
+      power: (personality.power || 1) * mods.aiPowerMult,
+      reactCD: (personality.reactCD || 22) * (1 / mods.aiReactionMult),
+    });
+  }
+  function reset(){
+    for (const k in mods) mods[k] = 1.0;
+  }
+  function setMod(key, val){ if (mods[key] != null) mods[key] = val; }
+  function getMod(key){ return mods[key]; }
+  return { mods: mods, applyToAI: applyToAI, reset: reset, setMod: setMod, getMod: getMod };
+})();
+
+// ── Custom match builder UI ─────────────────────────
+const CustomMatchUI = (function(){
+  let panel = null;
+  const opts = {
+    setsToWin: 2,
+    gamesPerSet: 6,
+    serveSpeedMult: 1.0,
+    playerSpeed: 1.0,
+    aiPersonality: 'baseliner',
+    weather: 'clear',
+    courtTheme: 'hard',
+    multiBall: false,
+    powerUpsOn: false,
+  };
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'custom-match-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(560px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(160,80,255,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.8rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#a050ff">⚙ CUSTOM MATCH</h2>' +
+          '<div id="cm-options" style="display:flex;flex-direction:column;gap:.4rem;max-height:55vh;overflow-y:auto"></div>' +
+          '<div style="display:flex;gap:.5rem">' +
+            '<button class="gbtn" id="cm-back">← Back</button>' +
+            '<button class="abtn" id="cm-start" style="flex:2">START MATCH ▶</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('cm-back').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+    document.getElementById('cm-start').onclick = function(){
+      AudioSys.click();
+      panel.style.display = 'none';
+      // Apply options and start
+      DifficultyMods.setMod('serveSpeedMult', opts.serveSpeedMult);
+      DifficultyMods.setMod('playerSpeedMult', opts.playerSpeed);
+      setAIPersonality(opts.aiPersonality);
+      Weather.setMode(opts.weather);
+      SETTINGS.theme = opts.courtTheme;
+      applyTheme(opts.courtTheme);
+      PowerUps.setEnabled(opts.powerUpsOn);
+      MultiBall.setEnabled(opts.multiBall);
+      startMode('ai_1v1', undefined, undefined, 'medium');
+    };
+  }
+  function render(){
+    const list = document.getElementById('cm-options');
+    list.innerHTML = '';
+    list.appendChild(slider('setsToWin', 'Sets to Win', 1, 5, 1));
+    list.appendChild(slider('gamesPerSet', 'Games per Set', 3, 12, 1));
+    list.appendChild(slider('serveSpeedMult', 'Serve Speed', 0.5, 2.0, 0.1));
+    list.appendChild(slider('playerSpeed', 'Player Speed', 0.5, 2.0, 0.1));
+    list.appendChild(select('aiPersonality', 'AI Style', Object.keys(AIPersonalities)));
+    list.appendChild(select('weather', 'Weather', ['clear','rain','snow','fog']));
+    list.appendChild(select('courtTheme', 'Court', ['hard','clay','grass','night']));
+    list.appendChild(toggle('multiBall', 'Multi-Ball'));
+    list.appendChild(toggle('powerUpsOn', 'Power-Ups'));
+  }
+  function slider(key, label, min, max, step){
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:.4rem 0;font-size:.7rem';
+    row.innerHTML =
+      '<span style="color:#aabbcc">' + label + '</span>' +
+      '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + opts[key] + '" style="flex:1;max-width:160px;margin:0 .8rem"/>' +
+      '<span class="val" style="color:#cdd9e6;font-size:.66rem;min-width:36px;text-align:right">' + opts[key] + '</span>';
+    const inp = row.querySelector('input');
+    const val = row.querySelector('.val');
+    inp.addEventListener('input', function(e){
+      opts[key] = parseFloat(e.target.value);
+      val.textContent = opts[key];
+    });
+    return row;
+  }
+  function select(key, label, options){
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:.4rem 0;font-size:.7rem';
+    let optHTML = '';
+    options.forEach(function(o){ optHTML += '<option value="' + o + '"' + (opts[key] === o ? ' selected' : '') + '>' + o + '</option>'; });
+    row.innerHTML =
+      '<span style="color:#aabbcc">' + label + '</span>' +
+      '<select style="background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:.3rem .5rem;font-family:Orbitron,sans-serif;font-size:.66rem">' + optHTML + '</select>';
+    const sel = row.querySelector('select');
+    sel.addEventListener('change', function(e){ opts[key] = e.target.value; });
+    return row;
+  }
+  function toggle(key, label){
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:.4rem 0;font-size:.7rem;cursor:pointer';
+    row.innerHTML =
+      '<span style="color:#aabbcc">' + label + '</span>' +
+      '<span class="tog" style="display:inline-block;width:36px;height:20px;border-radius:11px;' +
+      'background:' + (opts[key] ? 'rgba(0,180,255,.35)' : '#222') + ';' +
+      'border:1px solid ' + (opts[key] ? '#00b4ff' : '#333') + ';position:relative">' +
+        '<span style="position:absolute;top:1px;left:' + (opts[key] ? '17px' : '1px') + ';width:16px;height:16px;border-radius:50%;background:' + (opts[key] ? '#00b4ff' : '#888') + ';transition:left .15s,background .15s"></span>' +
+      '</span>';
+    row.onclick = function(){
+      AudioSys.click();
+      opts[key] = !opts[key];
+      render();
+    };
+    return row;
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── In-Game HUD overlay extensions ─────────────────
+const HUDExt = (function(){
+  let xpBarEl = null;
+  let coinDispEl = null;
+  let abilityBarEl = null;
+  function build(){
+    if (xpBarEl) return;
+    xpBarEl = document.createElement('div');
+    xpBarEl.id = 'xp-bar';
+    xpBarEl.style.cssText =
+      'position:fixed;top:74px;left:14px;background:rgba(8,12,22,.78);' +
+      'border:1px solid rgba(0,180,255,.3);border-radius:8px;padding:.45rem .7rem;' +
+      'font-family:Orbitron,sans-serif;font-size:.66rem;color:#cdd9e6;' +
+      'display:none;z-index:55;pointer-events:none';
+    document.body.appendChild(xpBarEl);
+    coinDispEl = document.createElement('div');
+    coinDispEl.id = 'coin-disp';
+    coinDispEl.style.cssText =
+      'position:fixed;top:108px;left:14px;background:rgba(8,12,22,.78);' +
+      'border:1px solid rgba(255,215,0,.3);border-radius:8px;padding:.4rem .7rem;' +
+      'font-family:Orbitron,sans-serif;font-size:.66rem;color:#ffd700;' +
+      'display:none;z-index:55;pointer-events:none';
+    document.body.appendChild(coinDispEl);
+    abilityBarEl = document.createElement('div');
+    abilityBarEl.id = 'ability-bar';
+    abilityBarEl.style.cssText =
+      'position:fixed;bottom:24px;left:14px;display:flex;gap:.4rem;z-index:55;' +
+      'pointer-events:none;font-family:Orbitron,sans-serif';
+    document.body.appendChild(abilityBarEl);
+  }
+  function refresh(){
+    if (!xpBarEl) return;
+    const info = Profile.getXPProgress();
+    xpBarEl.innerHTML = 'LVL ' + info.level + ' · ' + Math.round(info.progress * 100) + '% to ' + (info.level + 1);
+    if (coinDispEl) coinDispEl.innerHTML = '🪙 ' + Shop.getCoins();
+    if (abilityBarEl){
+      let html = '';
+      let i = 1;
+      for (const k in Abilities.abilities){
+        const a = Abilities.abilities[k];
+        const cd = Abilities.getCooldown(k);
+        const ready = cd <= 0;
+        html += '<div style="background:rgba(8,12,22,.85);border:1px solid ' + (ready ? '#00b4ff' : '#333') + ';' +
+          'border-radius:7px;padding:.32rem .5rem;font-size:.6rem;color:' + (ready ? '#00b4ff' : '#666') + '" title="' + a.desc + '">' +
+          a.keyHint + ' · ' + a.name + (ready ? '' : ' (' + cd.toFixed(1) + 's)') +
+          '</div>';
+        i++;
+      }
+      abilityBarEl.innerHTML = html;
+    }
+  }
+  function setVisible(v){
+    if (!xpBarEl) build();
+    xpBarEl.style.display = v ? 'block' : 'none';
+    if (coinDispEl) coinDispEl.style.display = v ? 'block' : 'none';
+    if (abilityBarEl) abilityBarEl.style.display = v ? 'flex' : 'none';
+  }
+  return { build: build, refresh: refresh, setVisible: setVisible };
+})();
+
+// ── Toggle Mute Button (always visible) ───────────────
+const MuteToggle = (function(){
+  let btn = null;
+  function build(){
+    btn = document.createElement('button');
+    btn.id = 'mute-toggle';
+    btn.style.cssText =
+      'position:fixed;top:12px;right:170px;width:42px;height:42px;border-radius:10px;' +
+      'border:1px solid rgba(0,180,255,.3);background:rgba(5,8,15,.78);color:#9bc4ec;' +
+      'cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;' +
+      'transition:all .15s;font-family:Orbitron,sans-serif;z-index:115';
+    btn.textContent = '🔊';
+    document.body.appendChild(btn);
+    btn.onclick = function(){
+      const muted = !AudioSys.isMuted();
+      AudioSys.setMuted(muted);
+      btn.textContent = muted ? '🔇' : '🔊';
+      btn.title = muted ? 'Unmute' : 'Mute';
+    };
+  }
+  function get(){ return btn; }
+  build();
+  return { get: get };
+})();
+
+// ── Onboarding Welcome Pop-up (first-time players) ─────
+const Welcome = (function(){
+  function shouldShow(){
+    try { return !localStorage.getItem('spike_tennis_welcomed_v1'); }
+    catch(_){ return true; }
+  }
+  function markSeen(){
+    try { localStorage.setItem('spike_tennis_welcomed_v1', '1'); } catch(_){}
+  }
+  function show(){
+    if (!shouldShow()) return;
+    Tutorial.start();
+    markSeen();
+  }
+  return { show: show, shouldShow: shouldShow };
+})();
+
+// ── Match Modes Library (variant rules) ────────────
+const MatchModes = {
+  classic1v1: {
+    id: 'classic1v1',
+    title: '1v1 Classic',
+    description: 'Standard 1v1 match against AI',
+    setsToWin: 2, gamesPerSet: 6,
+    multiBall: false, powerUps: false,
+  },
+  speedRound: {
+    id: 'speedRound',
+    title: 'Speed Round',
+    description: 'Faster ball, faster gameplay',
+    setsToWin: 1, gamesPerSet: 3,
+    multiBall: false, powerUps: false,
+    ballSpeedMult: 1.5,
+  },
+  chaos: {
+    id: 'chaos',
+    title: 'Chaos Mode',
+    description: 'Multi-ball + power-ups everywhere',
+    setsToWin: 1, gamesPerSet: 4,
+    multiBall: true, powerUps: true,
+  },
+  golden: {
+    id: 'golden',
+    title: 'Golden Set',
+    description: 'One set, no margin',
+    setsToWin: 1, gamesPerSet: 6,
+    multiBall: false, powerUps: false,
+  },
+  ironman: {
+    id: 'ironman',
+    title: 'Iron Man',
+    description: 'Best of 5 sets — endurance match',
+    setsToWin: 3, gamesPerSet: 6,
+    multiBall: false, powerUps: false,
+  },
+  trickShot: {
+    id: 'trickShot',
+    title: 'Trick Shot Mode',
+    description: 'Bonus points for cool shots',
+    setsToWin: 2, gamesPerSet: 6,
+    multiBall: false, powerUps: false,
+    trickShotsBonus: true,
+  },
+  retro: {
+    id: 'retro',
+    title: 'Retro Mode',
+    description: 'Pixel-style visuals, classic rules',
+    setsToWin: 2, gamesPerSet: 6,
+    multiBall: false, powerUps: false,
+    retroVisuals: true,
+  },
+  midnight: {
+    id: 'midnight',
+    title: 'Midnight Showdown',
+    description: 'Night court, dramatic lighting',
+    setsToWin: 2, gamesPerSet: 6,
+    multiBall: false, powerUps: false,
+    forceTheme: 'night',
+  },
+};
+
+// ── Coin Bank (centralized coin operations) ────────
+const CoinBank = (function(){
+  const observers = [];
+  function balance(){ return Shop.getCoins(); }
+  function add(amount, reason){
+    Shop.addCoins(amount);
+    observers.forEach(function(cb){ try{ cb(amount, balance()); }catch(_){} });
+    if (reason) Notifications.push('+' + amount + ' coins (' + reason + ')', { color:'rgba(255,215,0,.5)' });
+  }
+  function spend(amount, reason){
+    if (Shop.spendCoins(amount)){
+      observers.forEach(function(cb){ try{ cb(-amount, balance()); }catch(_){} });
+      return true;
+    }
+    return false;
+  }
+  function onChange(cb){ observers.push(cb); }
+  return { balance: balance, add: add, spend: spend, onChange: onChange };
+})();
+
+// ── More elaborate scoreboard with ELO display ─────
+const ScoreboardX = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'scoreboard-x';
+    panel.style.cssText =
+      'position:fixed;top:14px;right:170px;background:rgba(5,8,15,.85);' +
+      'border:1px solid rgba(0,180,255,.3);border-radius:10px;padding:.55rem .9rem;' +
+      'font-family:Orbitron,sans-serif;font-size:.7rem;color:#cdd9e6;display:none;z-index:55;' +
+      'pointer-events:none;letter-spacing:.04em';
+    document.body.appendChild(panel);
+  }
+  function refresh(){
+    if (!panel) build();
+    panel.innerHTML =
+      '<div style="display:flex;flex-direction:column;gap:.18rem">' +
+        '<div style="font-size:.6rem;color:#7a8ba0">RANK</div>' +
+        '<div style="color:' + (RankedSys.data.rating >= 1500 ? '#ffd700' : '#fff') + '">' + RankedSys.data.rank + ' · ' + RankedSys.data.rating + '</div>' +
+        '<div style="font-size:.58rem;color:#7a8ba0">' + RankedSys.data.wins + 'W / ' + RankedSys.data.losses + 'L</div>' +
+      '</div>';
+  }
+  function setVisible(v){
+    if (!panel) build();
+    panel.style.display = v ? 'block' : 'none';
+  }
+  return { setVisible: setVisible, refresh: refresh };
+})();
+
+// ── Persistence Cleanup ────────────────────────────
+const Persistence = (function(){
+  function clearAll(){
+    if (!confirm('Wipe ALL saved progress? This cannot be undone.')) return;
+    const keys = [
+      'spike_tennis_settings',
+      'spike_tennis_settings_v2',
+      'spike_tennis_profile_v1',
+      'spike_tennis_shop_v1',
+      'spike_tennis_history_v1',
+      'spike_tennis_running_v1',
+      'spike_tennis_skills_v1',
+      'spike_tennis_keybinds_v1',
+      'spike_tennis_ach_v1',
+      'spike_tennis_trophies_v1',
+      'spike_tennis_minigame_bests_v1',
+      'spike_tennis_practice_best',
+      'spike_tennis_daily_v1',
+      'spike_tennis_ranked_v1',
+      'spike_tennis_welcomed_v1',
+      'spike_tennis_tutorial_done',
+      'spike_tennis_tournament_won',
+    ];
+    keys.forEach(function(k){ try { localStorage.removeItem(k); } catch(_){} });
+    showMsg('All progress wiped. Reloading…', 1500);
+    setTimeout(function(){ location.reload(); }, 1500);
+  }
+  function exportAll(){
+    const data = {};
+    for (let i=0; i<localStorage.length; i++){
+      const key = localStorage.key(i);
+      if (key && key.indexOf('spike_tennis_') === 0){
+        data[key] = localStorage.getItem(key);
+      }
+    }
+    return data;
+  }
+  function downloadBackup(){
+    const data = exportAll();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'spike_tennis_backup_' + Date.now() + '.json';
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 100);
+  }
+  function importBackup(jsonText){
+    try {
+      const data = JSON.parse(jsonText);
+      for (const k in data){
+        if (k.indexOf('spike_tennis_') === 0){
+          localStorage.setItem(k, data[k]);
+        }
+      }
+      showMsg('Backup restored. Reloading…', 1500);
+      setTimeout(function(){ location.reload(); }, 1500);
+      return true;
+    } catch(e){
+      return false;
+    }
+  }
+  return { clearAll: clearAll, exportAll: exportAll, downloadBackup: downloadBackup, importBackup: importBackup };
+})();
+
+// ── In-Game Toast Notification (achievement-style) ────
+const Toast = (function(){
+  function show(text, opts){
+    Notifications.push(text, opts || {});
+  }
+  function showColor(text, color, duration){
+    Notifications.push(text, { color: color, duration: duration });
+  }
+  return { show: show, showColor: showColor };
+})();
+
+// ── FPS / Performance Counter ───────────────────────
+const PerfMonitor = (function(){
+  let frames = 0;
+  let lastTime = performance.now();
+  let fps = 60;
+  let avgDt = 0;
+  let el = null;
+  let visible = false;
+  function build(){
+    if (el) return;
+    el = document.createElement('div');
+    el.id = 'perf-mon';
+    el.style.cssText =
+      'position:fixed;top:14px;right:218px;background:rgba(5,8,15,.78);' +
+      'border:1px solid rgba(0,180,255,.2);border-radius:6px;padding:.3rem .5rem;' +
+      'font-family:monospace;font-size:.6rem;color:#7a8ba0;display:none;z-index:55;' +
+      'pointer-events:none';
+    document.body.appendChild(el);
+  }
+  function update(){
+    frames++;
+    const now = performance.now();
+    if (now - lastTime > 500){
+      fps = Math.round(frames * 1000 / (now - lastTime));
+      avgDt = (now - lastTime) / frames;
+      frames = 0;
+      lastTime = now;
+      if (visible && el){
+        el.textContent = 'FPS: ' + fps + ' · ' + avgDt.toFixed(1) + 'ms';
+      }
+    }
+  }
+  function setVisible(v){
+    if (!el) build();
+    visible = !!v;
+    el.style.display = v ? 'block' : 'none';
+  }
+  function getFPS(){ return fps; }
+  build();
+  return { update: update, setVisible: setVisible, getFPS: getFPS };
+})();
+
+// ── Toolbar Extension (more buttons in the corner) ─────
+const ToolbarX = (function(){
+  let toolbar = null;
+  function build(){
+    toolbar = document.createElement('div');
+    toolbar.id = 'corner-tools-x';
+    toolbar.style.cssText =
+      'position:fixed;top:62px;right:12px;display:flex;flex-direction:column;gap:6px;' +
+      'z-index:115;pointer-events:auto';
+    const buttons = [
+      { id:'tb-trophy',     icon:'🏆', label:'Trophies',     fn:function(){ TrophyUI.open(); } },
+      { id:'tb-ach',        icon:'🏅', label:'Achievements', fn:function(){ AchievementsUI.open(); } },
+      { id:'tb-shop',       icon:'🛒', label:'Shop',         fn:function(){ ShopUI.open(); } },
+      { id:'tb-skills',     icon:'⚙', label:'Skills',       fn:function(){ SkillsUI.open(); } },
+      { id:'tb-history',    icon:'📜', label:'History',      fn:function(){ MatchHistoryUI.open(); } },
+      { id:'tb-daily',      icon:'📅', label:'Daily',        fn:function(){ DailyUI.open(); } },
+      { id:'tb-ranked',     icon:'📊', label:'Ranked',       fn:function(){ RankedUI.open(); } },
+      { id:'tb-profile',    icon:'👤', label:'Profile',      fn:function(){ ProfileUI.open(); } },
+      { id:'tb-credits',    icon:'ℹ',  label:'Credits',      fn:function(){ CreditsUI.open(); } },
+      { id:'tb-help',       icon:'❓', label:'Help',         fn:function(){ HelpUI.open(); } },
+    ];
+    buttons.forEach(function(b){
+      const btn = document.createElement('button');
+      btn.id = b.id;
+      btn.title = b.label;
+      btn.style.cssText =
+        'width:36px;height:36px;border-radius:8px;border:1px solid rgba(0,180,255,.25);' +
+        'background:rgba(5,8,15,.78);color:#9bc4ec;cursor:pointer;font-size:.95rem;' +
+        'display:flex;align-items:center;justify-content:center;transition:all .15s;font-family:Orbitron,sans-serif';
+      btn.textContent = b.icon;
+      btn.onclick = b.fn;
+      btn.onmouseover = function(){ btn.style.borderColor = '#00b4ff'; btn.style.color = '#fff'; };
+      btn.onmouseout  = function(){ btn.style.borderColor = 'rgba(0,180,255,.25)'; btn.style.color = '#9bc4ec'; };
+      toolbar.appendChild(btn);
+    });
+    document.body.appendChild(toolbar);
+  }
+  function setVisible(v){
+    if (!toolbar) build();
+    toolbar.style.display = v ? 'flex' : 'none';
+  }
+  build();
+  return { setVisible: setVisible };
+})();
+
+// ── Court Decorations: extra props (chairs, ball boys) ──
+const CourtProps = (function(){
+  let placed = false;
+  function place(){
+    if (placed) return;
+    placed = true;
+    // Umpire chair (tall block at side of court)
+    const chairMat = new THREE.MeshStandardMaterial({ color: 0x444466, metalness: 0.3 });
+    const chair = new THREE.Mesh(new THREE.BoxGeometry(0.8, 4, 0.8), chairMat);
+    chair.position.set(CHW + 1.2, 2, 0);
+    chair.castShadow = true;
+    scene.add(chair);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.2, 1.0), chairMat);
+    seat.position.set(CHW + 1.2, 4.0, 0);
+    scene.add(seat);
+    // Bench at side for "spectators" near court
+    const benchMat = new THREE.MeshStandardMaterial({ color: 0x553311, roughness: 0.85 });
+    for (let s=-1; s<=1; s+=2){
+      const bench = new THREE.Mesh(new THREE.BoxGeometry(8, 0.3, 0.5), benchMat);
+      bench.position.set(0, 0.4, s * (CHL + 1.2));
+      scene.add(bench);
+      // Backrest
+      const back = new THREE.Mesh(new THREE.BoxGeometry(8, 0.7, 0.1), benchMat);
+      back.position.set(0, 0.85, s * (CHL + 1.5));
+      scene.add(back);
+    }
+    // Ball cart (a small box near the umpire)
+    const cartMat = new THREE.MeshStandardMaterial({ color: 0x223355 });
+    const cart = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.5, 0.8), cartMat);
+    cart.position.set(CHW + 0.5, 0.25, 1.0);
+    scene.add(cart);
+    // Tower lights (additional fixtures)
+    const lightFixtureMat = new THREE.MeshStandardMaterial({
+      color: 0xffffaa, emissive: 0xffffaa, emissiveIntensity: 0.5
+    });
+    for (let i=0; i<8; i++){
+      const ang = (i / 8) * Math.PI * 2;
+      const r = CHL + 5;
+      const x = Math.cos(ang) * r;
+      const z = Math.sin(ang) * r;
+      const fx = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 0.6), lightFixtureMat);
+      fx.position.set(x, 12, z);
+      scene.add(fx);
+    }
+    // Score board (large block at one end with face)
+    const sbMat = new THREE.MeshStandardMaterial({ color: 0x111122 });
+    const sb = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 0.4), sbMat);
+    sb.position.set(0, 5, -CHL - 5);
+    scene.add(sb);
+    // Sponsor logos along sidelines
+    for (let i=-2; i<=2; i++){
+      const sponsorMat = new THREE.MeshStandardMaterial({
+        color: 0x111122, emissive: 0x4488ff, emissiveIntensity: 0.3
+      });
+      const sponsor = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 0.05), sponsorMat);
+      sponsor.position.set(i * 2.8, 0.4, -CHL - 0.55);
+      scene.add(sponsor);
+    }
+  }
+  return { place: place };
+})();
+
+// ── Court size variants ─────────────────────────────
+const CourtSizes = {
+  doubles: { CW: 12, CL: 23.77, CHW: 6, CHL: 11.885 },
+  singles: { CW: 10.97, CL: 23.77, CHW: 5.485, CHL: 11.885 },
+  mini:    { CW: 8, CL: 18, CHW: 4, CHL: 9 },
+};
+
+// ── Network message types (for online play) ─────────
+const NetMessages = {
+  STATE:        'state',
+  HIT:          'hit',
+  CHAR_PICK:    'char',
+  CHAT:         'chat',
+  PING:         'ping',
+  PONG:         'pong',
+  ABILITY:      'ability',
+  EMOTE:        'emote',
+  PAUSE:        'pause',
+  RESUME:       'resume',
+  SCORE_UPDATE: 'score_update',
+  POINT_END:    'point_end',
+  MATCH_END:    'match_end',
+};
+
+// ── Online message handler dispatcher ───────────────
+const NetDispatch = (function(){
+  const handlers = {};
+  function on(type, handler){ handlers[type] = handler; }
+  function dispatch(msg){
+    if (!msg || !msg.type) return;
+    const h = handlers[msg.type];
+    if (h){ try { h(msg); } catch(e){} }
+  }
+  // Default handlers
+  on(NetMessages.PING, function(msg){
+    if (peerConn){
+      try { peerConn.send({ type: NetMessages.PONG, time: msg.time, replyTime: Date.now() }); } catch(_){}
+    }
+  });
+  on(NetMessages.CHAT, function(msg){
+    ChatSys.add(msg.from || 'Opponent', msg.text);
+    AudioSys.click();
+  });
+  on(NetMessages.EMOTE, function(msg){
+    AnimSys.setState(1, msg.emote || 'taunt');
+    showMsg('Opponent: ' + (msg.emote || 'emote'), 1500);
+  });
+  return { on: on, dispatch: dispatch };
+})();
+
+// ── Connection latency tracker ──────────────────────
+const Latency = (function(){
+  let pings = [];
+  let lastPingTime = 0;
+  function start(){
+    if (!peerConn) return;
+    setInterval(function(){
+      if (!peerConn) return;
+      try {
+        peerConn.send({ type: NetMessages.PING, time: Date.now() });
+        lastPingTime = Date.now();
+      } catch(_){}
+    }, 5000);
+  }
+  function recordPong(reqTime){
+    const rtt = Date.now() - reqTime;
+    pings.push(rtt);
+    if (pings.length > 10) pings.shift();
+  }
+  function getAverage(){
+    if (pings.length === 0) return 0;
+    return Math.round(pings.reduce(function(a,b){ return a+b; }, 0) / pings.length);
+  }
+  return { start: start, recordPong: recordPong, getAverage: getAverage };
+})();
+
+// ── Player Card Generator (visual avatar card) ──────
+function generatePlayerCardSVG(charIdx){
+  const c = CHARS[charIdx % CHARS.length];
+  return '<svg width="120" height="160" viewBox="0 0 120 160" xmlns="http://www.w3.org/2000/svg">' +
+    '<rect width="120" height="160" rx="10" fill="' + c.col + '" opacity="0.2"/>' +
+    '<rect x="2" y="2" width="116" height="156" rx="9" fill="none" stroke="' + c.col + '" stroke-width="2"/>' +
+    '<rect x="40" y="40" width="40" height="60" rx="5" fill="' + c.col + '"/>' +
+    '<circle cx="60" cy="30" r="14" fill="' + c.skin + '"/>' +
+    '<text x="60" y="130" font-family="Orbitron, sans-serif" font-size="14" font-weight="900" ' +
+    'text-anchor="middle" fill="' + c.col + '">' + c.name + '</text>' +
+    '<text x="60" y="148" font-family="Orbitron, sans-serif" font-size="9" ' +
+    'text-anchor="middle" fill="#aabbcc">' + (c.tag || 'PLAYER') + '</text>' +
+    '</svg>';
+}
+
+// ── Random Events (rare chaotic events during play) ────
+const RandomEvents = (function(){
+  const events = [
+    {
+      id: 'sudden_lob',
+      name: 'Wind Gust',
+      desc: 'A gust pushes the ball sideways!',
+      probability: 0.02,
+      apply: function(){
+        if (!B.active) return;
+        B.vel.x += (Math.random() - 0.5) * 4;
+        B.vel.z += (Math.random() - 0.5) * 1.5;
+        showMsg('💨 GUST!', 1000);
+        SoundBank.whistle();
+      },
+    },
+    {
+      id: 'speed_burst',
+      name: 'Speed Burst',
+      desc: 'Ball gains 50% speed',
+      probability: 0.015,
+      apply: function(){
+        if (!B.active) return;
+        B.vel.multiplyScalar(1.5);
+        showMsg('⚡ BOOST!', 800);
+        SoundBank.powerUp();
+      },
+    },
+    {
+      id: 'time_freeze',
+      name: 'Time Freeze',
+      desc: 'Slow time briefly',
+      probability: 0.005,
+      apply: function(){
+        showMsg('⏸ TIME FREEZE!', 1500);
+        if (typeof window !== 'undefined') window._timeFactor = 0.4;
+        setTimeout(function(){ if (typeof window !== 'undefined') window._timeFactor = 1; }, 2000);
+        SoundBank.dong();
+      },
+    },
+    {
+      id: 'spotlight',
+      name: 'Spotlight',
+      desc: 'Camera zooms dramatically',
+      probability: 0.008,
+      apply: function(){
+        CameraTransitions.setPreset('cinema', 0.5);
+        showMsg('📷 SPOTLIGHT!', 1500);
+        setTimeout(function(){ CameraTransitions.setPreset('default', 0.8); }, 2500);
+      },
+    },
+    {
+      id: 'crowd_wave',
+      name: 'Crowd Wave',
+      desc: 'Crowd does a wave',
+      probability: 0.01,
+      apply: function(){
+        triggerCrowdWave();
+        showMsg('🌊 WAVE!', 1000);
+        AudioSys.cheer(false);
+      },
+    },
+  ];
+  let enabled = false;
+  let cooldown = 0;
+  function setEnabled(on){ enabled = !!on; }
+  function update(dt){
+    if (!enabled) return;
+    cooldown -= dt;
+    if (cooldown > 0) return;
+    cooldown = 4 + Math.random() * 8; // next event window
+    if (gPhase !== 'rally' && gPhase !== 'practice') return;
+    for (let i=0; i<events.length; i++){
+      const e = events[i];
+      if (Math.random() < e.probability){
+        try { e.apply(); } catch(_){}
+        break;
+      }
+    }
+  }
+  return { setEnabled: setEnabled, update: update, events: events };
+})();
+
+// ── Skill Tree UI ──────────────────────────────────
+const SkillTreeUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'skilltree-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(620px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,80,200,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:1rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#ff80c8">🌳 SKILL TREE</h2>' +
+          '<div id="st-tree" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.6rem"></div>' +
+          '<div style="font-size:.66rem;color:#aabbcc;text-align:center">Skills level up automatically as you play.</div>' +
+          '<button class="abtn" id="st-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('st-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function render(){
+    const tree = document.getElementById('st-tree');
+    tree.innerHTML = '';
+    const all = SkillSystem.getAll();
+    for (const k in all){
+      const s = all[k];
+      const need = SkillSystem.xpForLevel(s.level + 1);
+      const prog = Math.min(1, s.xp / need);
+      const card = document.createElement('div');
+      card.style.cssText = 'background:rgba(8,12,22,.6);border:1.5px solid rgba(255,80,200,.2);' +
+        'border-radius:10px;padding:.65rem .55rem;display:flex;flex-direction:column;gap:.3rem;text-align:center';
+      card.innerHTML =
+        '<div style="font-size:.78rem;font-weight:700;color:#ff80c8">' + s.name + '</div>' +
+        '<div style="font-size:1.4rem;font-weight:900">' + s.level + '<span style="font-size:.66rem;color:#7a8ba0">/' + s.max + '</span></div>' +
+        '<div style="font-size:.6rem;color:#7a8ba0;line-height:1.4">' + s.desc + '</div>' +
+        '<div style="height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden">' +
+          '<div style="height:100%;width:' + Math.round(prog * 100) + '%;background:#ff80c8;border-radius:2px"></div>' +
+        '</div>';
+      tree.appendChild(card);
+    }
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    render();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Mode Picker UI (selects from MatchModes) ────────
+const ModePickerUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'mode-picker-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    let cards = '';
+    for (const k in MatchModes){
+      const m = MatchModes[k];
+      cards += '<div class="mpcard" data-id="' + k + '" style="background:rgba(12,18,32,.92);' +
+        'border:1.5px solid rgba(255,255,255,.07);border-radius:14px;padding:1rem .9rem;cursor:pointer;' +
+        'display:flex;flex-direction:column;gap:.4rem">' +
+          '<div style="font-size:.92rem;font-weight:700;color:#fff">' + m.title + '</div>' +
+          '<div style="font-size:.62rem;color:#7a8ba0;line-height:1.5">' + m.description + '</div>' +
+        '</div>';
+    }
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(620px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.8rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#00b4ff">🎮 MATCH MODES</h2>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.55rem">' + cards + '</div>' +
+          '<button class="gbtn" id="mp-close">← Back</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('mp-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+    document.querySelectorAll('.mpcard').forEach(function(c){
+      c.onclick = function(){
+        AudioSys.click();
+        panel.style.display = 'none';
+        const m = MatchModes[c.getAttribute('data-id')];
+        if (m){
+          PowerUps.setEnabled(!!m.powerUps);
+          MultiBall.setEnabled(!!m.multiBall);
+          if (m.forceTheme){ SETTINGS.theme = m.forceTheme; applyTheme(m.forceTheme); }
+          startMode('ai_1v1', undefined, undefined, 'medium');
+        }
+      };
+    });
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Daily Login Reward (gives coins + xp once per day) ─
+const DailyLogin = (function(){
+  const KEY = 'spike_tennis_daily_login_v1';
+  const data = { lastDate: null, streak: 0 };
+  function load(){
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) Object.assign(data, JSON.parse(raw));
+    } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch(_){}
+  }
+  function todayKey(){
+    const d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+  }
+  function yesterdayKey(){
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+  }
+  function checkin(){
+    const today = todayKey();
+    if (data.lastDate === today) return null;
+    if (data.lastDate === yesterdayKey()){
+      data.streak++;
+    } else {
+      data.streak = 1;
+    }
+    data.lastDate = today;
+    save();
+    const reward = { coins: 50 * data.streak, xp: 30 + 10 * data.streak };
+    Shop.addCoins(reward.coins);
+    Profile.awardXP(reward.xp);
+    showMsg('🎁 DAILY LOGIN: +' + reward.coins + ' coins, +' + reward.xp + ' XP (Streak: ' + data.streak + ')', 4000);
+    SoundBank.unlock();
+    return reward;
+  }
+  function getStreak(){ return data.streak; }
+  load();
+  return { checkin: checkin, getStreak: getStreak, data: data };
+})();
+
+// ── Cosmetic Application (apply equipped items to characters) ──
+const CosmeticApply = (function(){
+  function applyToChar(pi){
+    if (!chars[pi]) return;
+    const racketItem = Shop.getEquippedItem('racket');
+    const ballItem = Shop.getEquippedItem('ball');
+    const trailItem = Shop.getEquippedItem('trail');
+    const hatItem = Shop.getEquippedItem('hat');
+    if (racketItem && chars[pi].racket){
+      // Update the frame color of racket
+      chars[pi].racket.children.forEach(function(child){
+        if (child.material && child.material.emissive){
+          child.material.color.setHex(racketItem.color || 0xff5050);
+          child.material.emissive.setHex(racketItem.color || 0xff5050);
+        }
+      });
+    }
+    if (ballItem){
+      ballMesh.material.color.setHex(ballItem.color || 0xb2ff14);
+      ballMesh.material.emissive.setHex(ballItem.color || 0xb2ff14);
+    }
+    if (trailItem){
+      const variantName = trailItem.id.replace('trail_', '');
+      setTrail(variantName);
+    }
+  }
+  function applyAll(){
+    for (let i=0; i<chars.length; i++) applyToChar(i);
+  }
+  return { applyToChar: applyToChar, applyAll: applyAll };
+})();
+
+// ── More Sound Variants Bank ───────────────────────
+const ExtraSounds = (function(){
+  const sounds = {};
+  function get(name){
+    if (sounds[name]) return sounds[name];
+    return null;
+  }
+  // Pre-defined named tones
+  function chord(notes, dur, type, vol){
+    if (AudioSys.isMuted()) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ac = new Ctx();
+    notes.forEach(function(f){
+      const o = ac.createOscillator();
+      o.type = type || 'sine';
+      o.frequency.value = f;
+      const g = ac.createGain();
+      const t = ac.currentTime;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol || 0.07, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      o.connect(g); g.connect(ac.destination);
+      o.start(t); o.stop(t + dur + 0.02);
+    });
+  }
+  return {
+    majorChord:  function(){ chord([262, 330, 392], 0.4, 'sine', 0.06); },
+    minorChord:  function(){ chord([262, 311, 392], 0.4, 'sine', 0.06); },
+    arpeggio:    function(){ [262, 330, 392, 523].forEach(function(f, i){ setTimeout(function(){ chord([f], 0.15, 'square', 0.06); }, i * 80); }); },
+    fail:        function(){ chord([220, 196, 175], 0.4, 'sawtooth', 0.08); },
+    success:     function(){ chord([523, 659, 784], 0.5, 'sine', 0.08); },
+    levelComplete: function(){ [392, 523, 659, 784, 1047, 1319].forEach(function(f, i){ setTimeout(function(){ chord([f], 0.2, 'sine', 0.07); }, i * 100); }); },
+    powerCharge: function(){ for (let i=0; i<8; i++){ setTimeout(function(){ chord([200 + i * 100], 0.05, 'sawtooth', 0.04); }, i * 50); } },
+    cyberSwoosh: function(){ for (let i=0; i<5; i++){ setTimeout(function(){ chord([1200 - i * 150], 0.1, 'sawtooth', 0.05); }, i * 30); } },
+    blip:        function(){ chord([880], 0.05, 'square', 0.06); },
+    bloop:       function(){ chord([440, 880], 0.08, 'sine', 0.07); },
+    ding:        function(){ chord([1760], 0.12, 'sine', 0.06); },
+    dong:        function(){ chord([440], 0.30, 'sine', 0.10); },
+  };
+})();
+
+// ── Player Names UI Editor ─────────────────────────
+const PlayerNameUI = (function(){
+  const KEY = 'spike_tennis_player_name_v1';
+  let myName = 'P1';
+  function load(){
+    try { myName = localStorage.getItem(KEY) || 'P1'; } catch(_){}
+  }
+  function save(){
+    try { localStorage.setItem(KEY, myName); } catch(_){}
+  }
+  function setName(name){
+    myName = (name || 'P1').slice(0, 12);
+    save();
+  }
+  function getName(){ return myName; }
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'name-edit-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
+      'z-index:128;background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'font-family:Orbitron,sans-serif;color:#fff';
+    panel.innerHTML =
+      '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(0,180,255,.35);border-radius:18px;' +
+      'padding:1.7rem 1.5rem;width:min(360px,92vw);display:flex;flex-direction:column;gap:.8rem">' +
+        '<h2 style="font-size:1.1rem;text-align:center;letter-spacing:.06em">PLAYER NAME</h2>' +
+        '<input type="text" id="name-input" maxlength="12" placeholder="Enter name…" ' +
+          'style="background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);border-radius:8px;' +
+          'color:#fff;font-family:Orbitron,sans-serif;font-size:1rem;letter-spacing:.1em;' +
+          'padding:.7rem;width:100%;text-align:center;outline:none"/>' +
+        '<button class="abtn" id="name-save">SAVE</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('name-save').onclick = function(){
+      AudioSys.click();
+      const v = document.getElementById('name-input').value.trim();
+      setName(v || 'P1');
+      panel.style.display = 'none';
+      showMsg('Name set: ' + getName(), 1500);
+    };
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    document.getElementById('name-input').value = myName;
+    panel.style.display = 'flex';
+  }
+  load();
+  return { open: open, setName: setName, getName: getName };
+})();
+
+// ── Random Match Scenario (specific challenge) ────
+const Scenario = {
+  generate: function(){
+    const scenarios = [
+      'You are down 3-5 in the final set. Win it.',
+      'Your opponent is on match point. Save it.',
+      'No errors allowed for the rest of the set.',
+      'Win without losing a point.',
+      'Get 3 aces this game.',
+      'Hit only smashes for the next 5 shots.',
+      'Win this rally on the first hit.',
+    ];
+    return scenarios[Math.floor(Math.random() * scenarios.length)];
+  }
+};
+
+// ── Performance Cap (clamps animation deltas) ─────
+function safeDeltaTime(rawDt){
+  if (rawDt < 0 || isNaN(rawDt)) return 0.016;
+  return Math.min(rawDt, 0.05);
+}
+
+// ── Crowd Animation Variants ────────────────────────
+const CrowdAnim = (function(){
+  let waveT = 0;
+  let bounceT = 0;
+  function startBounce(duration){ bounceT = duration || 1.5; }
+  function startWave(duration){ waveT = duration || 2.0; }
+  function update(dt){
+    if (waveT > 0){
+      waveT = Math.max(0, waveT - dt);
+      const phase = (1 - waveT / 2.0) * Math.PI * 2;
+      stadiumCrowdGroup.children.forEach(function(child, i){
+        if (i % 3 !== 0) return;
+        const off = Math.max(0, Math.sin(phase + i * 0.05)) * 0.25;
+        if (child.userData._baseY == null) child.userData._baseY = child.position.y;
+        child.position.y = child.userData._baseY + off;
+      });
+    }
+    if (bounceT > 0){
+      bounceT = Math.max(0, bounceT - dt);
+      const b = Math.sin(bounceT * 12) * 0.10;
+      stadiumCrowdGroup.children.forEach(function(child, i){
+        if (i % 3 !== 0) return;
+        if (child.userData._baseY == null) child.userData._baseY = child.position.y;
+        child.position.y = child.userData._baseY + Math.abs(b);
+      });
+    }
+  }
+  return { startBounce: startBounce, startWave: startWave, update: update };
+})();
+
+// ── Theme-aware HUD coloring ──────────────────────────
+const ThemedHUD = (function(){
+  const themeColors = {
+    hard:  '#00b4ff',
+    clay:  '#ffae40',
+    grass: '#a0ff60',
+    night: '#ff40ff',
+  };
+  function applyForTheme(theme){
+    const c = themeColors[theme] || '#00b4ff';
+    document.documentElement.style.setProperty('--accent', c);
+  }
+  return { applyForTheme: applyForTheme, themeColors: themeColors };
+})();
+
+// ── Match Recap Generator ──────────────────────────
+const MatchRecap = (function(){
+  function generate(){
+    const lines = [];
+    const winner = SC.winner;
+    const wName = winner === 0 ? 'P1' : 'P2';
+    lines.push('Match completed: ' + wName + ' wins ' + SC.sets[winner] + '–' + SC.sets[1-winner]);
+    if (STATS.aces[winner] > 0) lines.push(wName + ' served ' + STATS.aces[winner] + ' aces.');
+    if (STATS.totalSmashes[winner] > 0) lines.push(wName + ' landed ' + STATS.totalSmashes[winner] + ' smashes.');
+    if (STATS.fastestServeKmh[winner] > 0) lines.push(wName + '\'s fastest serve: ' + STATS.fastestServeKmh[winner] + ' km/h.');
+    if (STATS.longestRally > 5) lines.push('Longest rally: ' + STATS.longestRally + ' shots.');
+    return lines;
+  }
+  return { generate: generate };
+})();
+
+// ── Match Recap UI ─────────────────────────────────
+const MatchRecapUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'recap-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
+      'z-index:135;background:rgba(5,8,15,.96);backdrop-filter:blur(8px);' +
+      'font-family:Orbitron,sans-serif;color:#fff';
+    panel.innerHTML =
+      '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(178,255,20,.35);border-radius:18px;' +
+      'padding:2rem 1.8rem;width:min(560px,92vw);display:flex;flex-direction:column;gap:1rem">' +
+        '<h2 style="font-size:1.4rem;text-align:center;letter-spacing:.06em;color:#b2ff14">📋 MATCH RECAP</h2>' +
+        '<div id="recap-text" style="display:flex;flex-direction:column;gap:.4rem;font-size:.78rem;color:#cdd9e6"></div>' +
+        '<button class="abtn" id="recap-close">CONTINUE</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('recap-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function show(){
+    if (!panel) build();
+    const t = document.getElementById('recap-text');
+    t.innerHTML = MatchRecap.generate().map(function(l){
+      return '<div style="padding:.4rem .6rem;background:rgba(8,12,22,.5);border-radius:6px;border-left:3px solid #b2ff14">' + l + '</div>';
+    }).join('');
+    panel.style.display = 'flex';
+  }
+  return { show: show };
+})();
+
+// ── Daily Login UI ─────────────────────────────────
+const DailyLoginUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'daily-login-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
+      'z-index:135;background:rgba(5,8,15,.94);backdrop-filter:blur(6px);' +
+      'font-family:Orbitron,sans-serif;color:#fff';
+    panel.innerHTML =
+      '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,200,80,.4);border-radius:18px;' +
+      'padding:2rem 1.8rem;width:min(440px,92vw);display:flex;flex-direction:column;gap:1rem;text-align:center">' +
+        '<h2 style="font-size:1.3rem;letter-spacing:.06em;color:#ffc850">🎁 DAILY LOGIN</h2>' +
+        '<div id="dl-message" style="font-size:.85rem;color:#cdd9e6">Welcome back!</div>' +
+        '<div id="dl-streak" style="font-size:1.5rem;color:#ffd700">Streak: 1</div>' +
+        '<button class="abtn" id="dl-claim">CLAIM REWARD</button>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('dl-claim').onclick = function(){
+      AudioSys.click();
+      const reward = DailyLogin.checkin();
+      if (reward){
+        SoundBank.unlock();
+      }
+      panel.style.display = 'none';
+    };
+  }
+  function show(){
+    if (!panel) build();
+    document.getElementById('dl-streak').textContent = 'Streak: ' + (DailyLogin.getStreak() + 1);
+    panel.style.display = 'flex';
+  }
+  function maybeShow(){
+    // Only show if we haven't already claimed today
+    const today = new Date();
+    const todayStr = today.getFullYear() + '-' + (today.getMonth()+1) + '-' + today.getDate();
+    if (DailyLogin.data.lastDate !== todayStr){
+      show();
+    }
+  }
+  return { show: show, maybeShow: maybeShow };
+})();
+
+// ── Trick Shot UI Picker ────────────────────────────
+const TrickShotUI = (function(){
+  let panel = null;
+  function build(){
+    panel = document.createElement('div');
+    panel.id = 'trickshot-panel';
+    panel.style.cssText =
+      'position:fixed;inset:0;display:none;z-index:128;' +
+      'background:rgba(5,8,15,.94);backdrop-filter:blur(4px);' +
+      'overflow-y:auto;-webkit-overflow-scrolling:touch';
+    let cards = '';
+    for (const k in TrickShots){
+      const t = TrickShots[k];
+      cards += '<div style="background:rgba(12,18,32,.92);border:1.5px solid rgba(255,200,50,.2);' +
+        'border-radius:12px;padding:.85rem .7rem;display:flex;flex-direction:column;gap:.3rem">' +
+          '<div style="font-size:.85rem;font-weight:700;color:#ffdc32">' + t.name + '</div>' +
+          '<div style="font-size:.66rem;color:#aabbcc">' + t.desc + '</div>' +
+          '<div style="font-size:.6rem;color:#7a8ba0;font-style:italic">Trigger: ' + t.requirement + '</div>' +
+          '<div style="font-size:.6rem;color:#7a8ba0">Power: ' + Math.round(t.powerMult*100) + '% · Cool: ' + '★'.repeat(t.coolFactor) + '</div>' +
+        '</div>';
+    }
+    panel.innerHTML =
+      '<div style="margin:auto;padding:30px 16px;min-height:calc(100vh - 60px);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'box-sizing:border-box;width:min(580px,94vw);font-family:Orbitron,sans-serif;color:#fff">' +
+        '<div style="background:rgba(12,18,32,.97);border:1.5px solid rgba(255,220,50,.35);border-radius:18px;' +
+        'padding:1.7rem 1.5rem;width:100%;display:flex;flex-direction:column;gap:.7rem">' +
+          '<h2 style="font-size:1.2rem;text-align:center;letter-spacing:.06em;color:#ffdc32">✨ TRICK SHOTS</h2>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:.55rem;max-height:60vh;overflow-y:auto">' + cards + '</div>' +
+          '<button class="abtn" id="ts-close">CLOSE</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    document.getElementById('ts-close').onclick = function(){ AudioSys.click(); panel.style.display = 'none'; };
+  }
+  function open(){
+    if (!panel) build();
+    AudioSys.click();
+    panel.style.display = 'block';
+  }
+  return { open: open };
+})();
+
+// ── Animation Pool: extra reusable animations ──────
+const AnimPool = (function(){
+  function shake(element, magnitude, duration){
+    if (!element) return;
+    let t = 0;
+    const interval = setInterval(function(){
+      t += 16;
+      element.style.transform = 'translate(' + (Math.random()-0.5)*magnitude + 'px,' + (Math.random()-0.5)*magnitude + 'px)';
+      if (t >= duration){
+        clearInterval(interval);
+        element.style.transform = '';
+      }
+    }, 16);
+  }
+  function fadeIn(element, duration){
+    if (!element) return;
+    element.style.opacity = '0';
+    element.style.transition = 'opacity ' + (duration || 400) + 'ms';
+    setTimeout(function(){ element.style.opacity = '1'; }, 10);
+  }
+  function fadeOut(element, duration, then){
+    if (!element) return;
+    element.style.transition = 'opacity ' + (duration || 400) + 'ms';
+    element.style.opacity = '0';
+    if (then) setTimeout(then, duration || 400);
+  }
+  function slideIn(element, fromX, duration){
+    if (!element) return;
+    element.style.transform = 'translateX(' + fromX + 'px)';
+    element.style.transition = 'transform ' + (duration || 400) + 'ms';
+    setTimeout(function(){ element.style.transform = 'translateX(0)'; }, 10);
+  }
+  function pulse(element, scale, duration){
+    if (!element) return;
+    element.style.transition = 'transform ' + (duration || 200) + 'ms';
+    element.style.transform = 'scale(' + (scale || 1.1) + ')';
+    setTimeout(function(){ element.style.transform = 'scale(1)'; }, duration || 200);
+  }
+  return { shake: shake, fadeIn: fadeIn, fadeOut: fadeOut, slideIn: slideIn, pulse: pulse };
+})();
+
+// ── Practice Mode Variants Renderer ─────────────────
+const PracticeModeRenderer = (function(){
+  function renderTargets(count){
+    // Currently delegated to Practice.spawnTargets
+    return count;
+  }
+  function setColor(color){ /* TODO: color targets */ }
+  return { renderTargets: renderTargets, setColor: setColor };
+})();
+
+// ── Spectator Camera Modes ─────────────────────────
+const SpectatorModes = {
+  followBall: {
+    name: 'Follow Ball',
+    update: function(dt){
+      if (!B.active) return;
+      CAM.tx += (B.pos.x - CAM.tx) * 0.15;
+      CAM.ty += (B.pos.y - CAM.ty) * 0.10;
+      CAM.tz += (B.pos.z - CAM.tz) * 0.15;
+    },
+  },
+  birdseye: {
+    name: 'Birds Eye',
+    update: function(dt){
+      CAM.pitch = 1.4;
+      CAM.dist = 18;
+      CAM.shoulder = 0;
+    },
+  },
+  tracking: {
+    name: 'Track Pan',
+    update: function(dt){
+      const t = performance.now() * 0.0005;
+      CAM.yaw = Math.sin(t) * 0.4;
+    },
+  },
+  closeCorner: {
+    name: 'Corner Close',
+    update: function(dt){
+      CAM.yaw = -1.0;
+      CAM.pitch = 0.20;
+      CAM.dist = 6.5;
+    },
+  },
+};
+
+// ── Court Surface Wear (over time) ──────────────────
+const CourtWear = (function(){
+  let wear = 0;
+  function increment(){ wear = Math.min(1, wear + 0.001); }
+  function get(){ return wear; }
+  function reset(){ wear = 0; }
+  return { increment: increment, get: get, reset: reset };
+})();
+
+// ── Coin Drop Animation (visual coins on screen) ──
+const CoinDrop = (function(){
+  function drop(amount){
+    const stack = document.createElement('div');
+    stack.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);' +
+      'pointer-events:none;z-index:200;font-family:Orbitron,sans-serif;font-weight:900;font-size:2rem;' +
+      'color:#ffd700;text-shadow:0 0 18px rgba(255,215,0,.7);' +
+      'transition:opacity 1.2s,transform 1.2s';
+    stack.textContent = '+' + amount + ' 🪙';
+    document.body.appendChild(stack);
+    setTimeout(function(){
+      stack.style.transform = 'translate(-50%, -120px)';
+      stack.style.opacity = '0';
+    }, 30);
+    setTimeout(function(){ if (stack.parentNode) stack.parentNode.removeChild(stack); }, 1300);
+    SoundBank.ding();
+  }
+  return { drop: drop };
+})();
+
+// ── Pause Indicator ────────────────────────────────
+function showPauseIndicator(){
+  let el = document.getElementById('pause-indicator');
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'pause-indicator';
+    el.style.cssText =
+      'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
+      'font-family:Orbitron,sans-serif;font-weight:900;font-size:6rem;' +
+      'color:#fff;text-shadow:0 0 30px rgba(255,255,255,.5);' +
+      'pointer-events:none;z-index:135;display:none;letter-spacing:.1em';
+    el.textContent = 'PAUSED';
+    document.body.appendChild(el);
+  }
+  el.style.display = 'block';
+}
+function hidePauseIndicator(){
+  const el = document.getElementById('pause-indicator');
+  if (el) el.style.display = 'none';
+}
+
+// ── Match Score Animation (animated scoreboard) ───
+function animateScoreChange(){
+  const pts = document.getElementById('pts');
+  if (!pts) return;
+  AnimPool.pulse(pts, 1.3, 250);
+}
+
+// ── Combo Counter UI ───────────────────────────────
+const ComboUI = (function(){
+  let el = null;
+  function build(){
+    el = document.createElement('div');
+    el.id = 'combo-ui';
+    el.style.cssText =
+      'position:fixed;top:160px;left:50%;transform:translateX(-50%);' +
+      'font-family:Orbitron,sans-serif;font-weight:900;font-size:1.2rem;' +
+      'color:#ffdc32;text-shadow:0 0 20px rgba(255,220,50,.6);' +
+      'pointer-events:none;z-index:55;display:none';
+    document.body.appendChild(el);
+  }
+  function show(streak){
+    if (!el) build();
+    if (streak < 2) return;
+    el.textContent = '🔥 STREAK ×' + streak;
+    el.style.display = 'block';
+  }
+  function hide(){
+    if (el) el.style.display = 'none';
+  }
+  return { show: show, hide: hide };
+})();
+
+// ── Crowd Volume Auto-Adjust ──────────────────────
+const CrowdVolumeAuto = (function(){
+  let level = 0.18;
+  function setBase(v){
+    level = v;
+    AudioSys.setCrowdVolume(level);
+  }
+  function spike(amount, duration){
+    AudioSys.setCrowdVolume(Math.min(0.9, level + amount));
+    setTimeout(function(){ AudioSys.setCrowdVolume(level); }, duration || 1500);
+  }
+  return { setBase: setBase, spike: spike };
+})();
+
+// ── Coin Indicator (live HUD coin counter) ────────
+const CoinIndicator = (function(){
+  let el = null;
+  function build(){
+    el = document.createElement('div');
+    el.id = 'coin-indicator';
+    el.style.cssText =
+      'position:fixed;top:14px;right:600px;background:rgba(8,12,22,.85);' +
+      'border:1px solid rgba(255,215,0,.3);border-radius:8px;padding:.4rem .7rem;' +
+      'font-family:Orbitron,sans-serif;font-size:.7rem;color:#ffd700;' +
+      'pointer-events:none;z-index:55;display:none';
+    document.body.appendChild(el);
+  }
+  function refresh(){
+    if (!el) build();
+    el.textContent = '🪙 ' + Shop.getCoins();
+  }
+  function setVisible(v){
+    if (!el) build();
+    el.style.display = v ? 'block' : 'none';
+    if (v) refresh();
+  }
+  return { build: build, refresh: refresh, setVisible: setVisible };
+})();
+
+// ── Daily Quest Bar (mini progress in HUD) ───────
+const QuestBar = (function(){
+  let el = null;
+  function build(){
+    el = document.createElement('div');
+    el.id = 'quest-bar';
+    el.style.cssText =
+      'position:fixed;bottom:24px;right:14px;background:rgba(8,12,22,.85);' +
+      'border:1px solid rgba(255,200,80,.3);border-radius:8px;padding:.4rem .7rem;' +
+      'font-family:Orbitron,sans-serif;font-size:.62rem;color:#ffc850;' +
+      'pointer-events:none;z-index:55;display:none;max-width:200px';
+    document.body.appendChild(el);
+  }
+  function refresh(){
+    if (!el) build();
+    const ch = DailyChallenges.getActive()[0];
+    if (!ch){ el.style.display = 'none'; return; }
+    const prog = DailyChallenges.getProgress(ch.id);
+    el.innerHTML =
+      '<div style="font-size:.55rem;color:#7a8ba0;letter-spacing:.1em;margin-bottom:.2rem">DAILY QUEST</div>' +
+      '<div>' + ch.title + ': ' + Math.min(prog, ch.target) + '/' + ch.target + '</div>';
+  }
+  function setVisible(v){
+    if (!el) build();
+    el.style.display = v ? 'block' : 'none';
+    if (v) refresh();
+  }
+  return { refresh: refresh, setVisible: setVisible };
+})();
+
+// ── Initial Lobby Hero Display ─────────────────────
+const LobbyHero = (function(){
+  let titleAnim = null;
+  function start(){
+    const logo = document.querySelector('#lobby .logo');
+    if (!logo) return;
+    let t = 0;
+    titleAnim = setInterval(function(){
+      t += 0.04;
+      const scale = 1 + Math.sin(t) * 0.03;
+      logo.style.transform = 'scale(' + scale + ')';
+    }, 16);
+  }
+  function stop(){
+    if (titleAnim){ clearInterval(titleAnim); titleAnim = null; }
+  }
+  return { start: start, stop: stop };
+})();
+
+// ── Notification Settings ──────────────────────────
+const NotificationPrefs = {
+  showAchievements: true,
+  showLevelUps: true,
+  showCoins: true,
+  showXP: true,
+  showCommentary: true,
+};
+
+// ── Player Position History (for replays/analysis) ──
+const PositionLog = (function(){
+  const log = [];
+  const MAX = 600;
+  function record(){
+    log.push({
+      time: performance.now(),
+      players: P.map(function(p){ return { x:p.x, z:p.z }; }),
+    });
+    if (log.length > MAX) log.shift();
+  }
+  function getAll(){ return log.slice(); }
+  function clear(){ log.length = 0; }
+  return { record: record, getAll: getAll, clear: clear };
+})();
+
+// ── Heartbeat / Pulse Indicator (under pressure) ──
+const Heartbeat = (function(){
+  let active = false;
+  let rate = 60;
+  function start(bpm){ active = true; rate = bpm || 60; }
+  function stop(){ active = false; }
+  function update(dt){
+    if (!active) return;
+    // Visual indicator: tint score panel red when active
+    const sb = document.getElementById('scoreboard');
+    if (!sb) return;
+    const t = performance.now() * 0.001 * (rate / 60);
+    const pulse = (Math.sin(t * Math.PI * 2) + 1) * 0.5;
+    sb.style.boxShadow = '0 0 ' + (8 + pulse * 16) + 'px rgba(255,80,80,' + (0.3 + pulse * 0.4) + ')';
+  }
+  function reset(){
+    const sb = document.getElementById('scoreboard');
+    if (sb) sb.style.boxShadow = '';
+    active = false;
+  }
+  return { start: start, stop: stop, update: update, reset: reset };
+})();
+
+// ── Match Tension Tracker ────────────────────────
+const Tension = (function(){
+  let level = 0;
+  function update(){
+    let t = 0;
+    // Higher when score is close
+    const setDiff = Math.abs(SC.sets[0] - SC.sets[1]);
+    const gameDiff = Math.abs(SC.games[0] - SC.games[1]);
+    t += (3 - Math.min(3, setDiff)) * 0.15;
+    t += (3 - Math.min(3, gameDiff)) * 0.10;
+    if (SC.deuce) t += 0.5;
+    if (SC.adv >= 0) t += 0.7;
+    if (SC.matchOver) t = 1.0;
+    if (Math.max(SC.sets[0], SC.sets[1]) >= 1) t += 0.2;
+    if (Math.max(SC.games[0], SC.games[1]) >= 5) t += 0.2;
+    level = Math.min(1, t);
+    return level;
+  }
+  function get(){ return level; }
+  return { update: update, get: get };
+})();
+
+// ── Mini Map Highlight (highlights important shots) ───
+function highlightMiniMap(x, z, color){
+  // Stub — could draw a flash on the radar canvas
+  // Implementation reserved for future expansion
+  if (typeof x !== 'number' || typeof z !== 'number') return;
+  return { x: x, z: z, color: color };
+}
+
+// ── XP Multiplier from Streak ───────────────────────
+function getXPMultiplier(){
+  return Multiplier.get();
+}
+
+// ── Helper: Format time ms→string ─────────────────
+function formatTime(ms){
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  if (h > 0) return h + 'h ' + (m % 60) + 'm';
+  if (m > 0) return m + 'm ' + (s % 60) + 's';
+  return s + 's';
+}
+function formatNumber(n){
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return n.toString();
+}
+
+// ── Per-frame integration of all new modules ──────
+function updateAllNewSystems(dt){
+  if (typeof CrowdAnim !== 'undefined' && CrowdAnim.update) CrowdAnim.update(dt);
+  if (typeof CameraTransitions !== 'undefined' && CameraTransitions.update) CameraTransitions.update(dt);
+  if (typeof Confetti !== 'undefined' && Confetti.update) Confetti.update(dt);
+  if (typeof SpectatorCam !== 'undefined' && SpectatorCam.update) SpectatorCam.update(dt);
+  if (typeof NetSway !== 'undefined' && NetSway.update) NetSway.update(dt);
+  if (typeof SurfaceWear !== 'undefined' && SurfaceWear.update) SurfaceWear.update(dt);
+  if (typeof Heartbeat !== 'undefined' && Heartbeat.update) Heartbeat.update(dt);
+  if (typeof RandomEvents !== 'undefined' && RandomEvents.update) RandomEvents.update(dt);
+  if (typeof Abilities !== 'undefined' && Abilities.update) Abilities.update(dt);
+  if (typeof MiniGames !== 'undefined' && MiniGames.update) MiniGames.update(dt);
+  if (typeof Tutorial !== 'undefined' && Tutorial.update) Tutorial.update(dt);
+  if (typeof Tension !== 'undefined' && Tension.update) Tension.update();
+  if (typeof EffectsPipeline !== 'undefined' && EffectsPipeline.update) EffectsPipeline.update(dt);
+  if (typeof Music !== 'undefined' && Music.tick) {} // music has its own loop
+  if (typeof PerfMonitor !== 'undefined' && PerfMonitor.update) PerfMonitor.update();
+  if (typeof MultiBall !== 'undefined' && MultiBall.update) MultiBall.update(dt);
+  if (typeof Weather !== 'undefined' && Weather.update) Weather.update(dt);
+  if (typeof Wind !== 'undefined' && Wind.applyToBall && B.active) Wind.applyToBall(B, dt);
+}
+
+// ── Boot integration: trigger Welcome on first load ──
+function bootSequence(){
+  // Run after DOMContentLoaded equivalent
+  setTimeout(function(){
+    try { DailyLoginUI.maybeShow(); } catch(_){}
+  }, 1500);
+  setTimeout(function(){
+    if (Welcome.shouldShow()){
+      try { Welcome.show(); } catch(_){}
+    }
+  }, 2500);
+  try { ToolbarX.setVisible(true); } catch(_){}
+  try { LobbyHero.start(); } catch(_){}
+  try { Music.setMode('lobby'); } catch(_){}
+  try { CourtProps.place(); } catch(_){}
+  try { FloatingBanners.build(); } catch(_){}
+  try { ThemedHUD.applyForTheme(activeTheme); } catch(_){}
+}
+
+// ── In-Game Help Toggle (small icon for quick legend) ──
+const HelpLegend = (function(){
+  let el = null;
+  function build(){
+    el = document.createElement('div');
+    el.id = 'help-legend';
+    el.style.cssText =
+      'position:fixed;bottom:24px;right:170px;background:rgba(8,12,22,.85);' +
+      'border:1px solid rgba(0,180,255,.25);border-radius:8px;padding:.4rem .6rem;' +
+      'font-family:Orbitron,sans-serif;font-size:.6rem;color:#cdd9e6;' +
+      'pointer-events:none;z-index:55;display:none;line-height:1.6';
+    el.innerHTML =
+      '<span style="color:#00b4ff">WASD</span> move · ' +
+      '<span style="color:#00b4ff">SHIFT</span> jump · ' +
+      '<span style="color:#00b4ff">SPACE</span> hit · ' +
+      '<span style="color:#00b4ff">RMB</span> camera';
+    document.body.appendChild(el);
+  }
+  function setVisible(v){
+    if (!el) build();
+    el.style.display = v ? 'block' : 'none';
+  }
+  return { setVisible: setVisible };
+})();
+
+// ── Achievement Progress Tracker (tracks per-match) ──
+const PerMatchAch = (function(){
+  let acesThisMatch = 0;
+  let smashesThisMatch = 0;
+  let errorsThisMatch = 0;
+  function reset(){
+    acesThisMatch = 0; smashesThisMatch = 0; errorsThisMatch = 0;
+  }
+  function aceUp(){
+    acesThisMatch++;
+    if (acesThisMatch >= 10) AchievementsExt.award('ace_10_match');
+  }
+  function smashUp(){
+    smashesThisMatch++;
+    if (smashesThisMatch >= 5) AchievementsExt.award('three_smashes_match');
+  }
+  function errorUp(){
+    errorsThisMatch++;
+  }
+  function getStats(){
+    return { aces: acesThisMatch, smashes: smashesThisMatch, errors: errorsThisMatch };
+  }
+  return { reset: reset, aceUp: aceUp, smashUp: smashUp, errorUp: errorUp, getStats: getStats };
+})();
+
+// ── Mini Score Animation when point is won ────────
+function pointWonAnimation(winner){
+  if (winner === 0){
+    Confetti.burst(P[0].x, 1.5, P[0].z, 30);
+    AnimSys.setState(0, 'victory');
+    SoundBank.success();
+  } else {
+    SoundBank.fail();
+  }
+  Multiplier[winner === 0 ? 'onPointWon' : 'onPointLost']();
+  ComboUI.show(Multiplier.getStreak());
+  Profile.recordPoint();
+  awardCoins(CoinRewards.perPoint, 'point');
+}
+
+// ── Effect Sound Mappings (named events → sounds) ──
+const EffectSounds = {
+  bigHit:   function(){ AudioSys.smash(); EffectsPipeline.flash(0.6); EffectsPipeline.shake(0.15, 0.4); },
+  serveAce: function(){ SoundBank.applause(); },
+  netHit:   function(){ AudioSys.net(); NetSway.trigger(0.25); },
+  bounce:   function(){ AudioSys.bounce(0.6); },
+};
+
+// ── Score Read-Out (called on score change) ───────
+function announceScore(){
+  if (typeof Commentator !== 'undefined' && Commentator.reactToScore){
+    Commentator.reactToScore(SC.str());
+  }
+  if (typeof animateScoreChange === 'function') animateScoreChange();
+}
+
 // ── Camera (over-the-shoulder, Roblox 3rd-person) ──────
 // shoulder shifts both camera and look-at to the right of the character,
 // so the character sits in the LEFT portion of the screen and the court
