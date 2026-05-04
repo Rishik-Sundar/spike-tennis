@@ -161,14 +161,311 @@ function buildCourt(){
     p.castShadow = true; scene.add(p);
   }
 
-  // Stadium walls
-  const wallMat = new THREE.MeshStandardMaterial({ color:0x0d1a2a, roughness:1 });
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(80, 24), wallMat);
-  back.position.set(0, 10, -28); scene.add(back);
-  const front = back.clone(); front.position.z = 28; front.rotation.y = Math.PI; scene.add(front);
-  const sideL = new THREE.Mesh(new THREE.PlaneGeometry(60, 24), wallMat);
-  sideL.position.set(-22, 10, 0); sideL.rotation.y = Math.PI/2; scene.add(sideL);
-  const sideR = sideL.clone(); sideR.position.x = 22; sideR.rotation.y = -Math.PI/2; scene.add(sideR);
+  // ── Stadium structure: multi-tier stands instead of flat walls ──
+  buildStadiumTiers();
+
+  // ── Glossy reflection on the court (faked with overlay plane) ──
+  const reflectMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, transparent:true, opacity:0.05, roughness:0.05, metalness:0.9
+  });
+  const reflect = new THREE.Mesh(new THREE.PlaneGeometry(CW, CL), reflectMat);
+  reflect.rotation.x = -Math.PI/2;
+  reflect.position.y = 0.0005;
+  scene.add(reflect);
+}
+
+// ── Build proper multi-tier stadium with skyline + sky dome ───
+function buildStadiumTiers(){
+  // ── 1. Sky dome (gradient instead of flat color) ──
+  const skyGeo = new THREE.SphereGeometry(120, 32, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+      topColor:    { value: new THREE.Color(0x0a1535) },
+      bottomColor: { value: new THREE.Color(0x4060a0) },
+      offset:      { value: 30 },
+      exponent:    { value: 0.6 },
+    },
+    vertexShader: [
+      'varying vec3 vWorldPosition;',
+      'void main() {',
+      '  vec4 worldPosition = modelMatrix * vec4(position, 1.0);',
+      '  vWorldPosition = worldPosition.xyz;',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+      '}',
+    ].join('\n'),
+    fragmentShader: [
+      'uniform vec3 topColor;',
+      'uniform vec3 bottomColor;',
+      'uniform float offset;',
+      'uniform float exponent;',
+      'varying vec3 vWorldPosition;',
+      'void main() {',
+      '  float h = normalize(vWorldPosition + offset).y;',
+      '  gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);',
+      '}',
+    ].join('\n'),
+  });
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  scene.add(sky);
+  // Stop using a solid background — sky dome handles it
+  scene.background = null;
+
+  // ── 2. Stars (small bright dots scattered in the sky) ──
+  const starsGeo = new THREE.BufferGeometry();
+  const starPositions = [];
+  for (let i=0; i<400; i++){
+    const r = 100;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1) * 0.5; // upper hemisphere mostly
+    const x = r * Math.sin(phi) * Math.cos(theta);
+    const y = r * Math.cos(phi);
+    const z = r * Math.sin(phi) * Math.sin(theta);
+    if (y > 5) starPositions.push(x, y, z);
+  }
+  starsGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+  const starsMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5, sizeAttenuation: true, transparent: true, opacity: 0.9 });
+  const stars = new THREE.Points(starsGeo, starsMat);
+  scene.add(stars);
+
+  // ── 3. Distant city skyline (silhouette of buildings on horizon) ──
+  const skylineGroup = new THREE.Group();
+  scene.add(skylineGroup);
+  const buildingMat = new THREE.MeshStandardMaterial({
+    color: 0x0a0e1a, roughness: 1, emissive: 0x000810, emissiveIntensity: 0.2
+  });
+  const litWindowMat = new THREE.MeshBasicMaterial({ color: 0xffeeaa });
+  for (let ring=0; ring<2; ring++){
+    const ringRadius = 60 + ring*15;
+    const buildingCount = 30 + ring*10;
+    for (let i=0; i<buildingCount; i++){
+      const ang = (i / buildingCount) * Math.PI * 2 + Math.random() * 0.05;
+      const dist = ringRadius + (Math.random() - 0.5) * 6;
+      const x = Math.cos(ang) * dist;
+      const z = Math.sin(ang) * dist;
+      const w = 4 + Math.random() * 6;
+      const h = 8 + Math.random() * 22 - ring*3;
+      const d = 4 + Math.random() * 4;
+      const bld = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), buildingMat);
+      bld.position.set(x, h/2, z);
+      // Random rotation toward center
+      bld.lookAt(0, h/2, 0);
+      skylineGroup.add(bld);
+      // Window lights — sprinkle a few lit windows
+      const windowsAcross = Math.floor(w / 1);
+      const windowsUp = Math.floor(h / 2);
+      for (let wx=0; wx<windowsAcross; wx++){
+        for (let wy=0; wy<windowsUp; wy++){
+          if (Math.random() > 0.6) continue;
+          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.6), litWindowMat);
+          // Position in local building space
+          const localX = -w/2 + (wx + 0.5) * (w / windowsAcross);
+          const localY = -h/2 + (wy + 0.5) * (h / windowsUp);
+          win.position.set(localX, localY, d/2 + 0.01);
+          bld.add(win);
+        }
+      }
+    }
+  }
+
+  // ── 4. Stadium tier structures (multi-level seating with rails) ──
+  const tierMat = new THREE.MeshStandardMaterial({ color:0x161e2a, roughness:0.9 });
+  const railMat = new THREE.MeshStandardMaterial({ color:0xff5050, emissive:0xff2020, emissiveIntensity:0.6 });
+  for (let tier=0; tier<3; tier++){
+    const tierY = 4 + tier * 4.5;
+    const tierZ = 18 + tier * 3.5;
+    // Back stand tier
+    for (const sgn of [1, -1]){
+      const stand = new THREE.Mesh(new THREE.BoxGeometry(48, 4, 5), tierMat);
+      stand.position.set(0, tierY, sgn * tierZ);
+      scene.add(stand);
+      // Stripe rail on front
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(48, 0.18, 0.18), railMat);
+      rail.position.set(0, tierY + 1.8, sgn * (tierZ - 2.5));
+      scene.add(rail);
+    }
+    // Side stand tiers
+    for (const sgn of [1, -1]){
+      const stand = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 32), tierMat);
+      stand.position.set(sgn * (15 + tier*3.5), tierY, 0);
+      scene.add(stand);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 32), railMat);
+      rail.position.set(sgn * (15 + tier*3.5 - 2.5), tierY + 1.8, 0);
+      scene.add(rail);
+    }
+  }
+
+  // ── 5. Stadium roof / cantilever beams ──
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x223344, metalness: 0.4, roughness: 0.6 });
+  // Crown of beams overhead (semi-circle)
+  for (let i=0; i<8; i++){
+    const ang = (i / 8) * Math.PI - Math.PI/2;
+    const x = Math.cos(ang) * 22;
+    const z = Math.sin(ang) * 22;
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 12), roofMat);
+    beam.position.set(x, 19, z);
+    beam.lookAt(0, 19, 0);
+    scene.add(beam);
+  }
+  // Side roof beams
+  const roofBeam = new THREE.Mesh(new THREE.BoxGeometry(50, 0.5, 0.5), roofMat);
+  roofBeam.position.set(0, 19, 22);
+  scene.add(roofBeam);
+  const roofBeam2 = roofBeam.clone(); roofBeam2.position.z = -22; scene.add(roofBeam2);
+
+  // ── 6. Big jumbotron / scoreboard above one stand ──
+  const jumboMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x001a44, emissiveIntensity: 0.6 });
+  const jumbo = new THREE.Mesh(new THREE.BoxGeometry(10, 4, 0.4), jumboMat);
+  jumbo.position.set(0, 14, -26);
+  scene.add(jumbo);
+  // Glowing edge frame around the jumbotron
+  const jumboFrameMat = new THREE.MeshStandardMaterial({ color: 0x00b4ff, emissive: 0x00b4ff, emissiveIntensity: 1.5 });
+  for (const off of [[-5.05, 14, -25.9], [5.05, 14, -25.9]]){
+    const v = new THREE.Mesh(new THREE.BoxGeometry(0.12, 4.2, 0.12), jumboFrameMat);
+    v.position.set(off[0], off[1], off[2]); scene.add(v);
+  }
+  for (const off of [[0, 16.05, -25.9], [0, 11.95, -25.9]]){
+    const h = new THREE.Mesh(new THREE.BoxGeometry(10.2, 0.12, 0.12), jumboFrameMat);
+    h.position.set(off[0], off[1], off[2]); scene.add(h);
+  }
+  // Jumbotron text canvas
+  const jumboCanvas = document.createElement('canvas');
+  jumboCanvas.width = 512; jumboCanvas.height = 192;
+  const jctx = jumboCanvas.getContext('2d');
+  function paintJumbotron(){
+    jctx.fillStyle = '#000010';
+    jctx.fillRect(0, 0, 512, 192);
+    jctx.strokeStyle = '#00b4ff';
+    jctx.lineWidth = 4;
+    jctx.strokeRect(8, 8, 496, 176);
+    jctx.fillStyle = '#00ffff';
+    jctx.font = 'bold 60px Orbitron, sans-serif';
+    jctx.textAlign = 'center';
+    jctx.textBaseline = 'middle';
+    jctx.fillText('SPIKE TENNIS', 256, 70);
+    jctx.fillStyle = '#ffdc32';
+    jctx.font = 'bold 80px Orbitron, sans-serif';
+    jctx.fillText('LIVE', 256, 140);
+  }
+  paintJumbotron();
+  const jumboTex = new THREE.CanvasTexture(jumboCanvas);
+  const jumboFaceMat = new THREE.MeshBasicMaterial({ map: jumboTex });
+  const jumboFace = new THREE.Mesh(new THREE.PlaneGeometry(9.6, 3.6), jumboFaceMat);
+  jumboFace.position.set(0, 14, -25.78);
+  scene.add(jumboFace);
+
+  // ── 7. Floodlight pole rigs (4 corners with proper light rigs) ──
+  const polePostMat = new THREE.MeshStandardMaterial({ color: 0x222233, metalness: 0.6 });
+  const lampHeadMat = new THREE.MeshStandardMaterial({ color: 0xffffee, emissive: 0xffffee, emissiveIntensity: 1.4 });
+  const cornerOffsets = [[-22, -22], [22, -22], [-22, 22], [22, 22]];
+  cornerOffsets.forEach(function(off){
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 18, 12), polePostMat);
+    post.position.set(off[0], 9, off[1]);
+    scene.add(post);
+    // Light rig on top: 6 lamps in a 2x3 grid
+    const rig = new THREE.Group();
+    rig.position.set(off[0], 18, off[1]);
+    for (let lx=-1; lx<=1; lx++){
+      for (let ly=0; ly<2; ly++){
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.32, 14, 10), lampHeadMat);
+        lamp.position.set(lx * 0.6, 0.5 + ly*0.5, 0);
+        rig.add(lamp);
+      }
+    }
+    rig.lookAt(0, 18, 0);
+    scene.add(rig);
+    // Light cone / volumetric beam (fake with low-opacity cone)
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0xffffaa, transparent: true, opacity: 0.07, side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const beam = new THREE.Mesh(new THREE.ConeGeometry(8, 22, 24, 1, true), beamMat);
+    beam.position.set(off[0]*0.45, 9, off[1]*0.45);
+    beam.lookAt(0, 0, 0);
+    beam.rotation.z = Math.PI; // point cone tip downward at center
+    scene.add(beam);
+  });
+
+  // ── 8. Court boundary advertising board (around the playing area) ──
+  const adColors = [0xff5050, 0x00b4ff, 0xb2ff14, 0xa050ff, 0xffdc32, 0xff80aa, 0x80ff80, 0xffae40];
+  const adTexts = ['SPIKE', 'TENNIS', 'PRO', 'CHAMPS', 'GAME ON', 'NEON', 'MATCH', 'COURT'];
+  function makeAdBoard(text, color){
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 64;
+    const cx = c.getContext('2d');
+    cx.fillStyle = '#0a0a14';
+    cx.fillRect(0, 0, 256, 64);
+    cx.strokeStyle = '#' + color.toString(16).padStart(6,'0');
+    cx.lineWidth = 4;
+    cx.strokeRect(4, 4, 248, 56);
+    cx.fillStyle = '#' + color.toString(16).padStart(6,'0');
+    cx.font = 'bold 40px Orbitron, sans-serif';
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    cx.fillText(text, 128, 32);
+    return c;
+  }
+  // Boards along long sidelines
+  for (let i=0; i<8; i++){
+    const c = adColors[i % adColors.length];
+    const text = adTexts[i % adTexts.length];
+    const tex = new THREE.CanvasTexture(makeAdBoard(text, c));
+    const mat = new THREE.MeshStandardMaterial({ map: tex, emissive: c, emissiveIntensity: 0.4 });
+    for (const side of [1, -1]){
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(4, 1), mat);
+      board.position.set(-CHL + 1.5 + i * 3.2, 0.7, side * (CHW + 1.5));
+      board.rotation.y = side > 0 ? Math.PI : 0;
+      // Wait the boards should be along the X-axis (sidelines run along Z)
+      // Let me put them along the side of the court (parallel to z-axis)
+      // Actually for sidelines: board faces inward, runs along z. Reposition:
+      board.position.set(side * (CHW + 1.6), 0.7, -CHL + 1.5 + i * 3.2);
+      board.rotation.y = side > 0 ? -Math.PI/2 : Math.PI/2;
+      scene.add(board);
+    }
+  }
+  // Backstop boards behind baselines
+  for (let i=0; i<5; i++){
+    const c = adColors[(i+3) % adColors.length];
+    const text = adTexts[(i+3) % adTexts.length];
+    const tex = new THREE.CanvasTexture(makeAdBoard(text, c));
+    const mat = new THREE.MeshStandardMaterial({ map: tex, emissive: c, emissiveIntensity: 0.4 });
+    for (const side of [1, -1]){
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(4, 1), mat);
+      board.position.set(-CHW + 0.5 + i * (CW/4), 0.7, side * (CHL + 1.6));
+      board.rotation.y = side > 0 ? 0 : Math.PI;
+      scene.add(board);
+    }
+  }
+
+  // ── 9. Glowing court edge LED strip (already exists, but enhance) ──
+  // Done in court neon strips already.
+
+  // ── 10. Atmospheric particles (floating dust motes catching the light) ──
+  const dustGeo = new THREE.BufferGeometry();
+  const dustPositions = [];
+  for (let i=0; i<200; i++){
+    dustPositions.push(
+      (Math.random() - 0.5) * 50,
+      Math.random() * 18 + 1,
+      (Math.random() - 0.5) * 50
+    );
+  }
+  dustGeo.setAttribute('position', new THREE.Float32BufferAttribute(dustPositions, 3));
+  const dustMat = new THREE.PointsMaterial({ color: 0xffeeaa, size: 0.08, transparent: true, opacity: 0.4, sizeAttenuation: true });
+  const dust = new THREE.Points(dustGeo, dustMat);
+  scene.add(dust);
+
+  // Animate dust slowly drifting
+  function animateDust(){
+    const positions = dustGeo.attributes.position.array;
+    for (let i=0; i<positions.length; i+=3){
+      positions[i+1] += 0.005;
+      if (positions[i+1] > 19) positions[i+1] = 1;
+    }
+    dustGeo.attributes.position.needsUpdate = true;
+    requestAnimationFrame(animateDust);
+  }
+  animateDust();
 }
 buildCourt();
 
